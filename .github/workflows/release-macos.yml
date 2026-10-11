@@ -1,6 +1,7 @@
 name: macOS release
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - 'v*'
@@ -161,6 +162,7 @@ jobs:
 
   publish:
     name: Publish checked GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
     steps:
