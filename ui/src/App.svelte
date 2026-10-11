@@ -970,7 +970,7 @@
 
 <style>
   :global(*) { box-sizing: border-box; }
-  :global(html), :global(body), :global(#svelte) { width: 100%; height: 100%; margin: 0; }
+  :global(html), :global(body), :global(#svelte) { width: 100%; height: 100%; margin: 0; background-color: #080909; }
   :global(body) {
     overflow: hidden;
     background: #050606;
