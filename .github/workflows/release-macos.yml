@@ -85,6 +85,7 @@ jobs:
 
       - name: Prepare App Store Connect notarization key
         env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
           APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
@@ -99,6 +100,8 @@ jobs:
           fi
           key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
           echo "$APPLE_API_KEY_CONTENT" | base64 --decode > "$key_path"
+          echo "APPLE_API_ISSUER=$APPLE_API_ISSUER" >> "$GITHUB_ENV"
+          echo "APPLE_API_KEY=$APPLE_API_KEY" >> "$GITHUB_ENV"
           echo "APPLE_API_KEY_PATH=$key_path" >> "$GITHUB_ENV"
 
       - name: Build native app binary
@@ -119,9 +122,6 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
         run: |
           signing_identity="${APPLE_SIGNING_IDENTITY:--}"
           APPLE_SIGNING_IDENTITY="$signing_identity" pnpm exec tauri bundle --target "${{ matrix.target }}" --bundles app,dmg --config "target/tauri-bundle-${{ matrix.arch }}.json"
