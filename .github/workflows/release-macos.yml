@@ -33,7 +33,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 12.10.1
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -42,11 +42,10 @@ jobs:
       - name: Install native audio and bundling dependencies
         run: brew install mpv dylibbundler
 
-      - name: Install Tauri CLI
-        run: cargo install tauri-cli --version '^2' --locked
-
-      - name: Install frontend dependencies
-        run: pnpm --dir ui install --frozen-lockfile
+      - name: Install workspace dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --dir ui install --frozen-lockfile
 
       - name: Configure this repository's updater feed
         run: node scripts/prepare-release-config.mjs
@@ -112,7 +111,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           export LIBRARY_PATH="$(brew --prefix)/lib:${LIBRARY_PATH:-}"
-          cargo tauri build --no-bundle --target "${{ matrix.target }}"
+          pnpm exec tauri build --no-bundle --target "${{ matrix.target }}"
 
       - name: Collect and validate Homebrew dylibs
         run: node scripts/prepare-macos-bundle.mjs
@@ -131,7 +130,7 @@ jobs:
           APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
         run: |
           signing_identity="${APPLE_SIGNING_IDENTITY:--}"
-          APPLE_SIGNING_IDENTITY="$signing_identity" cargo tauri bundle --target "${{ matrix.target }}" --bundles app,dmg --config "target/tauri-bundle-${{ matrix.arch }}.json"
+          APPLE_SIGNING_IDENTITY="$signing_identity" pnpm exec tauri bundle --target "${{ matrix.target }}" --bundles app,dmg --config "target/tauri-bundle-${{ matrix.arch }}.json"
 
       - name: Verify bundled dependencies and create release assets
         env:

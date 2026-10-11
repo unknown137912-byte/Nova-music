@@ -1,6 +1,6 @@
 {
   "name": "nova-music",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "NOVA Music desktop app",
   "private": true,
   "scripts": {
@@ -8,5 +8,8 @@
     "check": "pnpm --dir ui check",
     "tauri": "cargo tauri"
   },
-  "license": "GPL-3.0-or-later"
+  "license": "GPL-3.0-or-later",
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.2"
+  }
 }

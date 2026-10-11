@@ -26,9 +26,10 @@ On macOS with Xcode command-line tools, Rust, and pnpm installed:
 ```sh
 brew install mpv dylibbundler
 pnpm --dir ui install --frozen-lockfile
-cargo tauri build --no-bundle
+pnpm install --frozen-lockfile
+pnpm exec tauri build --no-bundle
 node scripts/prepare-macos-bundle.mjs
-cargo tauri bundle --bundles app,dmg --config target/tauri-bundle-arm64.json
+pnpm exec tauri bundle --bundles app,dmg --config target/tauri-bundle-arm64.json
 ```
 
 The release DMG is written under `target/release/bundle/dmg/`. The package preparation step copies `libmpv` and all required Homebrew dylibs into the app before Tauri creates the final `.app`, updater archive, and DMG.

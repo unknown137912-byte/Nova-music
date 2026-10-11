@@ -1,4 +1,8 @@
+packages:
+  - .
+
 allowBuilds:
   '@hugeicons/svelte': false
+  '@sveltejs/kit': true
   esbuild: true
   svelte-preprocess: false
