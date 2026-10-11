@@ -1,5 +1,6 @@
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 #[derive(Debug)]
 pub struct Db {
@@ -9,6 +10,10 @@ pub struct Db {
 impl Db {
     pub fn open(path: &std::path::Path) -> std::result::Result<Self, Box<dyn std::error::Error>> {
         let conn = Connection::open(path)?;
+        conn.busy_timeout(Duration::from_secs(5))?;
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        conn.pragma_update(None, "foreign_keys", "ON")?;
         let db = Db {
             conn: Arc::new(Mutex::new(conn)),
         };
@@ -19,9 +24,28 @@ impl Db {
     pub fn open_or_quarantine(
         path: &std::path::Path,
     ) -> std::result::Result<(Self, Option<std::path::PathBuf>), Box<dyn std::error::Error>> {
-        // For now, just call open and return None for quarantined
-        let db = Self::open(path)?;
-        Ok((db, None))
+        match Self::open(path) {
+            Ok(db) => Ok((db, None)),
+            Err(error) if is_database_corruption(error.as_ref()) => {
+                let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+                let mut backup = path.as_os_str().to_os_string();
+                backup.push(format!(".corrupt-{stamp}"));
+                let backup = std::path::PathBuf::from(backup);
+                std::fs::rename(path, &backup)?;
+                for suffix in ["-wal", "-shm"] {
+                    let mut sidecar = path.as_os_str().to_os_string();
+                    sidecar.push(suffix);
+                    let sidecar = std::path::PathBuf::from(sidecar);
+                    if sidecar.exists() {
+                        let mut sidecar_backup = backup.as_os_str().to_os_string();
+                        sidecar_backup.push(suffix);
+                        std::fs::rename(sidecar, sidecar_backup)?;
+                    }
+                }
+                Ok((Self::open(path)?, Some(backup)))
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn initialize_tables(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -131,6 +155,313 @@ impl Db {
             [],
         )?;
 
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS local_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                track_id TEXT NOT NULL UNIQUE,
+                title TEXT NOT NULL,
+                artist TEXT NOT NULL,
+                thumbnail_url TEXT NOT NULL DEFAULT '',
+                duration_seconds REAL NOT NULL DEFAULT 0,
+                play_count INTEGER NOT NULL DEFAULT 0,
+                last_played TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_local_history_recent ON local_history(last_played DESC)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_local_history_taste ON local_history(play_count DESC, last_played DESC)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS local_playlists (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS local_playlist_tracks (
+                playlist_id TEXT NOT NULL,
+                track_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                artist TEXT NOT NULL DEFAULT '',
+                thumbnail_url TEXT NOT NULL DEFAULT '',
+                duration_seconds REAL NOT NULL DEFAULT 0,
+                position INTEGER NOT NULL,
+                added_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (playlist_id, track_id),
+                FOREIGN KEY (playlist_id) REFERENCES local_playlists(id) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_local_playlist_tracks_order ON local_playlist_tracks(playlist_id, position)",
+            [],
+        )?;
+
+        Ok(())
+    }
+
+    pub async fn create_local_playlist(
+        &self,
+        title: &str,
+    ) -> std::result::Result<String, Box<dyn std::error::Error>> {
+        let id = format!(
+            "NOVA_LOCAL_{}_{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        );
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        conn.execute(
+            "INSERT INTO local_playlists (id, title) VALUES (?1, ?2)",
+            rusqlite::params![id, title],
+        )?;
+        Ok(id)
+    }
+
+    pub async fn get_local_playlists(
+        &self,
+    ) -> std::result::Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        let mut statement = conn.prepare(
+            "SELECT p.id, p.title,
+                (SELECT thumbnail_url FROM local_playlist_tracks t WHERE t.playlist_id = p.id ORDER BY t.position LIMIT 1),
+                (SELECT COUNT(*) FROM local_playlist_tracks t WHERE t.playlist_id = p.id),
+                p.created_at, p.updated_at
+             FROM local_playlists p ORDER BY p.updated_at DESC, p.title COLLATE NOCASE",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, String>(0)?,
+                "playlistId": row.get::<_, String>(0)?,
+                "title": row.get::<_, String>(1)?,
+                "thumbnail": row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                "trackCount": row.get::<_, i64>(3)?,
+                "isLocal": true,
+                "createdAt": row.get::<_, String>(4)?,
+                "updatedAt": row.get::<_, String>(5)?,
+            }))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub async fn get_local_playlist(
+        &self,
+        playlist_id: &str,
+    ) -> std::result::Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        let mut playlist = conn
+            .query_row(
+                "SELECT id, title, created_at, updated_at FROM local_playlists WHERE id = ?1",
+                [playlist_id],
+                |row| {
+                    Ok(serde_json::json!({
+                        "id": row.get::<_, String>(0)?,
+                        "title": row.get::<_, String>(1)?,
+                        "createdAt": row.get::<_, String>(2)?,
+                        "updatedAt": row.get::<_, String>(3)?,
+                    }))
+                },
+            )
+            .optional()?;
+        let Some(ref mut playlist_value) = playlist else {
+            return Ok(None);
+        };
+        let mut statement = conn.prepare(
+            "SELECT track_id, title, artist, thumbnail_url, duration_seconds, position, added_at
+             FROM local_playlist_tracks WHERE playlist_id = ?1 ORDER BY position, added_at",
+        )?;
+        let rows = statement.query_map([playlist_id], |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, String>(0)?,
+                "videoId": row.get::<_, String>(0)?,
+                "title": row.get::<_, String>(1)?,
+                "artist": row.get::<_, String>(2)?,
+                "thumbnail": row.get::<_, String>(3)?,
+                "duration": row.get::<_, f64>(4)?,
+                "position": row.get::<_, i64>(5)?,
+                "addedAt": row.get::<_, String>(6)?,
+            }))
+        })?;
+        let tracks = rows.collect::<Result<Vec<_>, _>>()?;
+        playlist_value["thumbnail"] = tracks
+            .first()
+            .and_then(|track| track.get("thumbnail"))
+            .cloned()
+            .unwrap_or(serde_json::Value::String(String::new()));
+        playlist_value["trackCount"] = serde_json::json!(tracks.len());
+        playlist_value["items"] = serde_json::json!(tracks);
+        Ok(playlist)
+    }
+
+    pub async fn add_track_to_local_playlist(
+        &self,
+        playlist_id: &str,
+        track_id: &str,
+        title: &str,
+        artist: &str,
+        thumbnail_url: &str,
+        duration_seconds: f64,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM local_playlists WHERE id = ?1)",
+            [playlist_id],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Local playlist was not found",
+            )
+            .into());
+        }
+        let position: i64 = conn.query_row(
+            "SELECT COALESCE(MAX(position) + 1, 0) FROM local_playlist_tracks WHERE playlist_id = ?1",
+            [playlist_id],
+            |row| row.get(0),
+        )?;
+        conn.execute(
+            "INSERT INTO local_playlist_tracks (playlist_id, track_id, title, artist, thumbnail_url, duration_seconds, position)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(playlist_id, track_id) DO UPDATE SET
+                title = excluded.title,
+                artist = excluded.artist,
+                thumbnail_url = excluded.thumbnail_url,
+                duration_seconds = excluded.duration_seconds",
+            rusqlite::params![playlist_id, track_id, title, artist, thumbnail_url, duration_seconds, position],
+        )?;
+        conn.execute(
+            "UPDATE local_playlists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?1",
+            [playlist_id],
+        )?;
+        Ok(())
+    }
+
+    pub async fn delete_local_playlist(
+        &self,
+        playlist_id: &str,
+    ) -> std::result::Result<bool, Box<dyn std::error::Error>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        Ok(conn.execute("DELETE FROM local_playlists WHERE id = ?1", [playlist_id])? > 0)
+    }
+
+    pub async fn record_local_play(
+        &self,
+        track_id: &str,
+        title: &str,
+        artist: &str,
+        thumbnail_url: &str,
+        duration_seconds: f64,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        conn.execute(
+            "INSERT INTO local_history (track_id, title, artist, thumbnail_url, duration_seconds, play_count, last_played)
+             VALUES (?1, ?2, ?3, ?4, ?5, 1, CURRENT_TIMESTAMP)
+             ON CONFLICT(track_id) DO UPDATE SET
+                title = excluded.title,
+                artist = excluded.artist,
+                thumbnail_url = excluded.thumbnail_url,
+                duration_seconds = excluded.duration_seconds,
+                play_count = local_history.play_count + 1,
+                last_played = CURRENT_TIMESTAMP",
+            rusqlite::params![track_id, title, artist, thumbnail_url, duration_seconds],
+        )?;
+        conn.execute(
+            "DELETE FROM local_history WHERE id NOT IN (SELECT id FROM local_history ORDER BY last_played DESC LIMIT 500)",
+            [],
+        )?;
+        Ok(())
+    }
+
+    pub async fn get_local_history(
+        &self,
+        limit: usize,
+    ) -> std::result::Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        let mut statement = conn.prepare(
+            "SELECT track_id, title, artist, thumbnail_url, duration_seconds, play_count, last_played
+             FROM local_history ORDER BY last_played DESC LIMIT ?1",
+        )?;
+        let rows = statement.query_map([limit.min(500) as i64], |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, String>(0)?,
+                "videoId": row.get::<_, String>(0)?,
+                "title": row.get::<_, String>(1)?,
+                "artist": row.get::<_, String>(2)?,
+                "thumbnail": row.get::<_, String>(3)?,
+                "duration": row.get::<_, f64>(4)?,
+                "playCount": row.get::<_, i64>(5)?,
+                "lastPlayed": row.get::<_, String>(6)?,
+            }))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub async fn get_top_listened_track(
+        &self,
+    ) -> std::result::Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        let mut statement = conn.prepare(
+            "SELECT track_id, title, artist, thumbnail_url, duration_seconds, play_count
+             FROM local_history ORDER BY play_count DESC, last_played DESC LIMIT 1",
+        )?;
+        let mut rows = statement.query([])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(serde_json::json!({
+                "id": row.get::<_, String>(0)?,
+                "videoId": row.get::<_, String>(0)?,
+                "title": row.get::<_, String>(1)?,
+                "artist": row.get::<_, String>(2)?,
+                "thumbnail": row.get::<_, String>(3)?,
+                "duration": row.get::<_, f64>(4)?,
+                "playCount": row.get::<_, i64>(5)?,
+            })))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn optimize(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        conn.execute(
+            "DELETE FROM cache WHERE CAST(expires_at AS INTEGER) > 0 AND CAST(expires_at AS INTEGER) < CAST(strftime('%s','now') AS INTEGER)",
+            [],
+        )?;
+        conn.execute_batch("PRAGMA optimize; VACUUM;")?;
         Ok(())
     }
 
@@ -390,10 +721,9 @@ impl Db {
         expires_at: Option<i64>,
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let conn = self.conn.lock().unwrap();
-        let value_str = std::str::from_utf8(value).unwrap_or("");
         conn.execute(
             "INSERT OR REPLACE INTO cache (key, value, content_type, expires_at) VALUES (?, ?, ?, ?)",
-            [&key, value_str, content_type, &expires_at.unwrap_or(0).to_string()],
+            rusqlite::params![key, value, content_type, expires_at.unwrap_or(0)],
         )?;
         Ok(())
     }
@@ -430,5 +760,122 @@ impl Db {
         }
 
         Ok(results)
+    }
+}
+
+fn is_database_corruption(error: &(dyn std::error::Error + 'static)) -> bool {
+    let Some(rusqlite::Error::SqliteFailure(failure, _)) = error.downcast_ref::<rusqlite::Error>()
+    else {
+        return false;
+    };
+    matches!(
+        failure.code,
+        rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Db;
+
+    fn temporary_db_path(label: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "nova-music-{label}-{}-{}.sqlite",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ))
+    }
+
+    #[tokio::test]
+    async fn local_history_updates_play_count_and_keeps_latest_track_metadata() {
+        let path = temporary_db_path("history");
+        let db = Db::open(&path).expect("open test database");
+        db.record_local_play("track-1", "First title", "Artist", "cover", 120.0)
+            .await
+            .expect("record first play");
+        db.record_local_play("track-1", "Updated title", "Artist", "cover-2", 135.0)
+            .await
+            .expect("record repeat play");
+
+        let history = db.get_local_history(10).await.expect("read history");
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0]["playCount"], 2);
+        assert_eq!(history[0]["title"], "Updated title");
+        assert_eq!(history[0]["duration"], 135.0);
+
+        drop(db);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+    }
+
+    #[tokio::test]
+    async fn cache_round_trips_arbitrary_binary_data() {
+        let path = temporary_db_path("cache");
+        let db = Db::open(&path).expect("open test database");
+        let bytes = [0, 255, 17, 128, 1];
+        db.cache_set("binary", &bytes, "application/octet-stream", Some(123))
+            .await
+            .expect("store bytes");
+        assert_eq!(
+            db.cache_get("binary").await.expect("read bytes"),
+            Some(bytes.to_vec())
+        );
+
+        drop(db);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+    }
+
+    #[tokio::test]
+    async fn local_playlists_create_add_list_and_delete_tracks() {
+        let path = temporary_db_path("playlists");
+        let db = Db::open(&path).expect("open test database");
+        let playlist_id = db
+            .create_local_playlist("Road trip")
+            .await
+            .expect("create playlist");
+        db.add_track_to_local_playlist(&playlist_id, "track-1", "First", "Artist", "cover", 95.0)
+            .await
+            .expect("add track");
+        db.add_track_to_local_playlist(
+            &playlist_id,
+            "track-1",
+            "Updated",
+            "Artist",
+            "cover-2",
+            100.0,
+        )
+        .await
+        .expect("update duplicate track");
+
+        let playlists = db.get_local_playlists().await.expect("list playlists");
+        assert_eq!(playlists.len(), 1);
+        assert_eq!(playlists[0]["id"], playlist_id);
+        assert_eq!(playlists[0]["trackCount"], 1);
+        assert_eq!(playlists[0]["thumbnail"], "cover-2");
+
+        let playlist = db
+            .get_local_playlist(&playlist_id)
+            .await
+            .expect("load playlist")
+            .expect("playlist exists");
+        assert_eq!(playlist["items"].as_array().expect("track list").len(), 1);
+        assert_eq!(playlist["items"][0]["title"], "Updated");
+        assert!(db
+            .delete_local_playlist(&playlist_id)
+            .await
+            .expect("delete playlist"));
+        assert!(db
+            .get_local_playlist(&playlist_id)
+            .await
+            .expect("load deleted playlist")
+            .is_none());
+
+        drop(db);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
     }
 }

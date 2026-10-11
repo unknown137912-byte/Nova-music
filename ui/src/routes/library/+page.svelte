@@ -2,6 +2,7 @@
 import { onMount } from 'svelte';
 import { invoke } from '@tauri-apps/api/core';
 import TrackActions from '../../lib/TrackActions.svelte';
+import { RefreshCw, Clock3 } from 'lucide-svelte';
 
 export let onPlayTrack: (track: any) => void = () => {};
 export let onOpenPlaylist: (id: string) => void = () => {};
@@ -31,7 +32,10 @@ async function loadData() {
       historyGroups = [];
     } else {
       const hist: any = await invoke('get_history').catch(() => []);
-      historyGroups = Array.isArray(hist) ? hist : [];
+      const entries = Array.isArray(hist) ? hist : [];
+      historyGroups = entries.some((entry) => Array.isArray(entry?.items))
+        ? entries
+        : (entries.length ? [{ header: 'Recently played in NOVA', items: entries }] : []);
     }
     accountInfo = acc;
     loading = false;
@@ -42,7 +46,18 @@ async function loadData() {
 }
 
 onMount(() => {
-  loadData();
+  void loadData();
+  const refresh = () => void loadData();
+  window.addEventListener('nova-account-updated', refresh);
+  window.addEventListener('nova-refresh-current-view', refresh);
+  window.addEventListener('nova-playlist-updated', refresh);
+  window.addEventListener('nova-local-playlists-changed', refresh);
+  return () => {
+    window.removeEventListener('nova-account-updated', refresh);
+    window.removeEventListener('nova-refresh-current-view', refresh);
+    window.removeEventListener('nova-playlist-updated', refresh);
+    window.removeEventListener('nova-local-playlists-changed', refresh);
+  };
 });
 
 function handlePlayHistoryItem(item: any) {
@@ -62,6 +77,14 @@ function parseDuration(dStr: string): number {
   if (parts.length === 3) return (parts[0] * 3600) + (parts[1] * 60) + parts[2];
   return 180;
 }
+
+function playFirstRecentTrack() {
+  const first = historyGroups.flatMap((group) => Array.isArray(group?.items) ? group.items : [])[0];
+  if (first) handlePlayHistoryItem(first);
+}
+
+$: recentTracks = historyGroups.flatMap((group) => Array.isArray(group?.items) ? group.items : []);
+$: savedCollectionCount = libraryData.length + albumData.length + artistData.length;
 </script>
 
 <div class="library-container">
@@ -75,7 +98,11 @@ function parseDuration(dStr: string): number {
         </span>
       {/if}
     </div>
-    <p>Saved albums, personal playlists, and synced YouTube Music history</p>
+    <p>Your playlists, albums, artists, and listening history in one place.</p>
+    <div class="library-toolbar">
+      <div class="library-filter-pills"><span class="library-pill active">All collections</span><span class="library-pill">Playlists {libraryData.length}</span><span class="library-pill">Albums {albumData.length}</span><span class="library-pill">Artists {artistData.length}</span><small>{savedCollectionCount} saved</small></div>
+      <button class="library-refresh" on:click={loadData} disabled={loading}><RefreshCw size={14} class={loading ? 'spinning' : ''} /> Refresh</button>
+    </div>
   </div>
 
   {#if loading}
@@ -94,19 +121,20 @@ function parseDuration(dStr: string): number {
         </div>
       </button>
 
-      <button type="button" class="tile repeat-tile" on:click={() => onOpenPlaylist('ON_REPEAT')}>
-        <div class="tile-icon">🔁</div>
+      <button type="button" class="tile repeat-tile" on:click={playFirstRecentTrack} disabled={!recentTracks.length}>
+        <div class="tile-icon"><Clock3 size={25} /></div>
         <div class="tile-content">
-          <h3>On Repeat</h3>
-          <p>Your most played tracks this month</p>
+          <h3>Continue listening</h3>
+          <p>{recentTracks[0]?.title || 'Your recent tracks appear here'}</p>
         </div>
+        <span class="tile-play">▶</span>
       </button>
     </div>
 
     <!-- Recent History Section -->
     {#if historyGroups && historyGroups.length > 0}
       <div class="library-section">
-        <h2>Recently Played (Account History)</h2>
+        <h2>Recently played</h2>
         <div class="history-list">
           {#each historyGroups as group}
             {#if group.items && group.items.length > 0}
@@ -135,10 +163,10 @@ function parseDuration(dStr: string): number {
       <div class="library-section">
         <h2>Your Playlists</h2>
         <div class="playlists-grid">
-          {#each libraryData as item}
+          {#each libraryData as item (item.id || item.playlistId || item.browseId || item.title)}
             <button type="button"
               class="lib-card"
-              on:click={() => onOpenPlaylist(item.id)}
+              on:click={() => onOpenPlaylist(item.id || item.playlistId || item.browseId || item.browse_id || '')}
             >
               <img src={item.thumbnail || '/placeholder.jpg'} alt="" class="card-art" />
               <div class="card-title">{item.title}</div>
@@ -147,11 +175,12 @@ function parseDuration(dStr: string): number {
           {/each}
         </div>
       </div>
-    {:else if !accountInfo?.is_logged_in}
+    {:else if !accountInfo?.is_logged_in && !historyGroups.length}
       <div class="empty-notice">
         <div class="notice-icon">♫</div>
         <h3>Connect your YouTube Account</h3>
-        <p>Go to Settings to sign in with your Google account or paste your session cookie to load your playlists and watch history.</p>
+        <p>Connect YouTube Music in Settings to sync playlists, albums, and recommendations.</p>
+        <button class="connect-account-button" on:click={() => window.dispatchEvent(new CustomEvent('nova-open-settings'))}>Open account settings</button>
       </div>
     {/if}
 
@@ -191,6 +220,42 @@ function parseDuration(dStr: string): number {
   max-width: 1400px;
   margin: 0 auto;
 }
+
+  .library-container { max-width: none; min-height: 100%; padding: 30px clamp(24px, 4vw, 58px) 86px; color: #f3f5f4; background: #080909; }
+  .library-header { margin-bottom: 20px; }
+  .header-badge { color: #969c99; font-size: 9px; font-weight: 800; letter-spacing: .15em; }
+  .title-row h1 { font-size: clamp(26px, 3vw, 36px); letter-spacing: -.045em; }
+  .library-header p { font-size: 12px; }
+  .library-toolbar { min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 19px; border-bottom: 1px solid rgba(255,255,255,.09); }
+  .library-filter-pills { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+  .library-pill { padding: 7px 11px; color: #aeb4b1; background: #161918; border: 1px solid rgba(255,255,255,.045); border-radius: 18px; font-size: 10px; }
+  .library-pill.active { color: #111; background: #f2f4f3; }
+  .library-filter-pills small { margin-left: 5px; color: #777f7b; font-size: 10px; }
+  .library-refresh { display: flex; align-items: center; gap: 6px; padding: 7px 10px; color: #c3c8c5; background: transparent; border: 1px solid rgba(255,255,255,.08); border-radius: 18px; font-size: 10px; cursor: pointer; }
+  .library-refresh:hover { color: #fff; background: #1b1e1d; }
+  .library-refresh:disabled { opacity: .55; cursor: default; }
+  .quick-tiles { grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; margin: 19px 0 28px; }
+  .tile { min-height: 82px; padding: 14px 16px; border-radius: 10px; }
+  .liked-tile { background: linear-gradient(110deg, #33243a, #1a1a22 72%); border-color: rgba(211,102,178,.23); }
+  .repeat-tile { justify-content: flex-start; color: #f5f6f6; background: linear-gradient(110deg, #283638, #171a1a 72%); border-color: rgba(106,184,195,.19); }
+  .repeat-tile:disabled { opacity: .68; cursor: default; }
+  .tile-icon { min-width: 40px; }
+  .tile-content h3 { margin-bottom: 4px; font-size: 13px; }
+  .tile-content p { max-width: 380px; overflow: hidden; margin: 0; color: #a8aeab; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+  .tile-play { margin-left: auto; color: #d8e5e5; opacity: 0; transition: opacity .18s ease; }
+  .tile:hover .tile-play { opacity: 1; }
+  .library-section { margin: 25px 0 30px; }
+  .library-section h2 { margin-bottom: 10px; color: #f2f4f3; font-size: 17px; letter-spacing: -.025em; }
+  .playlists-grid { grid-template-columns: repeat(auto-fill, minmax(145px, 1fr)); gap: 8px; }
+  .lib-card { padding: 10px; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 8px; transition: background .18s ease, border-color .18s ease, transform .18s ease; }
+  .lib-card:hover { background: #171a19; border-color: rgba(255,255,255,.08); transform: translateY(-2px); }
+  .card-art { border-radius: 6px; }
+  .card-title { margin-top: 7px; }
+  .history-row { min-height: 58px; background: transparent; border-color: transparent; border-radius: 6px; }
+  .history-row:hover { background: #181b1a; border-color: transparent; }
+  .empty-notice { background: #121414; border-color: rgba(255,255,255,.08); }
+  .connect-account-button { margin-top: 14px; padding: 9px 13px; color: #101211; background: #f1f3f2; border: 0; border-radius: 18px; font-size: 10px; font-weight: 700; cursor: pointer; }
+  .connect-account-button:hover { background: #fff; }
 
 .library-header {
   margin-bottom: 30px;

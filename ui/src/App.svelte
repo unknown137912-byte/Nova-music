@@ -50,8 +50,17 @@
   let appNotice = '';
   let appNoticeTimer: ReturnType<typeof setTimeout> | undefined;
   let closeToBackgroundEnabled = false;
+  let autoPlayNext = true;
   let lastNotifiedTrackId = '';
   let lastNonzeroVolume = 85;
+  let globalSearchQuery = '';
+  let globalSearchResults: any = null;
+  let globalSearchLoading = false;
+  let globalSearchError = '';
+  let searchPopoverOpen = false;
+  let globalSearchInput: HTMLInputElement | undefined;
+  let globalSearchTimer: ReturnType<typeof setTimeout> | undefined;
+  let globalSearchRequest = 0;
   let lyricsTrackId = '';
   let lyricsData: any = null;
   let lyricsLoading = false;
@@ -62,8 +71,31 @@
   let coverRgb = '244 107 130';
   let coverDeepRgb = '30 17 30';
 
+  function fallbackArtworkPalette(source: string) {
+    let hash = 2166136261;
+    for (let index = 0; index < source.length; index += 1) {
+      hash = Math.imul(hash ^ source.charCodeAt(index), 16777619);
+    }
+    const hue = (hash >>> 0) % 360;
+    const saturation = 0.46;
+    const lightness = 0.52;
+    const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation;
+    const x = chroma * (1 - Math.abs((hue / 60) % 2 - 1));
+    const match = lightness - chroma / 2;
+    const channels = hue < 60 ? [chroma, x, 0]
+      : hue < 120 ? [x, chroma, 0]
+      : hue < 180 ? [0, chroma, x]
+      : hue < 240 ? [0, x, chroma]
+      : hue < 300 ? [x, 0, chroma]
+      : [chroma, 0, x];
+    const [r, g, b] = channels.map((channel) => Math.round((channel + match) * 255));
+    coverRgb = `${r} ${g} ${b}`;
+    coverDeepRgb = `${Math.round(r * .2 + 7)} ${Math.round(g * .2 + 8)} ${Math.round(b * .22 + 10)}`;
+  }
+
   function sampleArtworkPalette(source: string) {
     if (!source) return;
+    fallbackArtworkPalette(source);
     const image = new Image();
     image.crossOrigin = 'anonymous';
     image.onload = () => {
@@ -107,11 +139,24 @@
     let stopEnded: (() => void) | undefined;
     let stopCloseRequest: (() => void) | undefined;
     const openHistory = () => navigate('library');
+    const openSettingsFromPage = () => openSettings();
+    const refreshAccountLibrary = () => void loadAccountAndLibrary();
+    const closeSearchOnOutsideClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target?.closest('.global-search-wrap')) searchPopoverOpen = false;
+    };
     window.addEventListener('nova-open-history', openHistory);
+    window.addEventListener('nova-open-settings', openSettingsFromPage);
+    window.addEventListener('nova-local-playlists-changed', refreshAccountLibrary);
+    window.addEventListener('pointerdown', closeSearchOnOutsideClick);
     const handleCloseSettingChange = (event: Event) => {
       closeToBackgroundEnabled = (event as CustomEvent<boolean>).detail;
     };
+    const handleAutoPlayChange = (event: Event) => {
+      autoPlayNext = (event as CustomEvent<boolean>).detail;
+    };
     window.addEventListener('nova-close-to-background-changed', handleCloseSettingChange);
+    window.addEventListener('nova-autoplay-changed', handleAutoPlayChange);
 
     listen('playback-started', async () => {
       playbackError = null;
@@ -158,7 +203,8 @@
 
     listen('playback-ended', async () => {
       try {
-        const next: any = await invoke('dequeue_next_track');
+        let next: any = await invoke('dequeue_next_track');
+        if (!next && autoPlayNext) next = await invoke('get_autoplay_track');
         if (next && !disposed) {
           await handlePlayTrack(next);
           await loadQueue();
@@ -192,6 +238,7 @@
     invoke<any>('get_settings').then((settings) => {
       if (!disposed) {
         closeToBackgroundEnabled = settings?.close_to_tray === 'true';
+        autoPlayNext = settings?.auto_play_next !== 'false';
         const theme = String(settings?.cosmic_theme || 'nebula');
         const shell = document.querySelector('.app-shell');
         shell?.classList.remove('theme-nebula', 'theme-cyber', 'theme-deepspace');
@@ -246,11 +293,17 @@
       stopEnded?.();
       stopCloseRequest?.();
       window.removeEventListener('nova-open-history', openHistory);
+      window.removeEventListener('nova-open-settings', openSettingsFromPage);
+      window.removeEventListener('nova-local-playlists-changed', refreshAccountLibrary);
+      window.removeEventListener('pointerdown', closeSearchOnOutsideClick);
       window.removeEventListener('nova-close-to-background-changed', handleCloseSettingChange);
+      window.removeEventListener('nova-autoplay-changed', handleAutoPlayChange);
+      if (globalSearchTimer) clearTimeout(globalSearchTimer);
     };
   });
 
   function navigate(tab: Tab) {
+    searchPopoverOpen = false;
     if (activeTab === tab) {
       if (showNowPlaying) void closeImmersivePlayer();
       return;
@@ -278,6 +331,86 @@
     if (appNoticeTimer) clearTimeout(appNoticeTimer);
     appNoticeTimer = setTimeout(() => appNotice = '', 4000);
   }
+
+  async function runGlobalSearch() {
+    const query = globalSearchQuery.trim();
+    if (!query) return;
+    const request = ++globalSearchRequest;
+    globalSearchLoading = true;
+    globalSearchError = '';
+    searchPopoverOpen = true;
+    try {
+      const result: any = await invoke('search', { query });
+      if (request === globalSearchRequest) globalSearchResults = result;
+    } catch (error: any) {
+      if (request === globalSearchRequest) {
+        globalSearchError = typeof error === 'string' ? error : (error?.message || 'Search failed. Try again.');
+        globalSearchResults = null;
+      }
+    } finally {
+      if (request === globalSearchRequest) globalSearchLoading = false;
+    }
+  }
+
+  function handleGlobalSearchInput() {
+    searchPopoverOpen = true;
+    globalSearchRequest += 1;
+    globalSearchResults = null;
+    globalSearchError = '';
+    globalSearchLoading = false;
+    if (globalSearchTimer) clearTimeout(globalSearchTimer);
+    const query = globalSearchQuery.trim();
+    if (query.length < 2) {
+      globalSearchRequest += 1;
+      globalSearchResults = null;
+      globalSearchError = '';
+      globalSearchLoading = false;
+      return;
+    }
+    globalSearchTimer = setTimeout(() => void runGlobalSearch(), 320);
+  }
+
+  function handleGlobalSearchKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape') {
+      searchPopoverOpen = false;
+      globalSearchInput?.blur();
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      if (globalSearchTimer) clearTimeout(globalSearchTimer);
+      if (globalSearchResults) navigate('search');
+      else void runGlobalSearch();
+    }
+  }
+
+  function openFullSearch() {
+    if (!globalSearchQuery.trim()) return;
+    if (globalSearchTimer) clearTimeout(globalSearchTimer);
+    searchPopoverOpen = false;
+    navigate('search');
+  }
+
+  function chooseGlobalSearchResult(item: any, kind: 'song' | 'artist' | 'album' | 'playlist') {
+    searchPopoverOpen = false;
+    if (kind === 'song') {
+      handlePlayTrack({
+        ...item,
+        id: item.videoId || item.video_id || item.id,
+        artist: item.artist || item.artists || item.subtitle || 'YouTube Music',
+        thumbnail: item.thumbnail || item.thumbnail_url || '',
+      });
+    } else if (kind === 'artist') {
+      handleOpenArtist(item.id || item.browseId || item.browse_id || '');
+    } else {
+      handleOpenPlaylist(item.id || item.browseId || item.browse_id || '');
+    }
+  }
+
+  $: quickSearchSongs = (globalSearchResults?.songs || []).slice(0, 6);
+  $: quickSearchCollections = [
+    ...(globalSearchResults?.artists || []).slice(0, 2).map((item: any) => ({ ...item, resultKind: 'artist' })),
+    ...(globalSearchResults?.albums || []).slice(0, 2).map((item: any) => ({ ...item, resultKind: 'album' })),
+    ...(globalSearchResults?.playlists || []).slice(0, 2).map((item: any) => ({ ...item, resultKind: 'playlist' })),
+  ];
 
   function resetLyricsForTrack(trackId: string) {
     if (lyricsTrackId === trackId) return;
@@ -436,12 +569,18 @@
 
   async function skipTrack() {
     try {
-      const next: any = await invoke('dequeue_next_track');
+      let next: any = await invoke('dequeue_next_track');
+      let autoplayError: any = null;
+      if (!next && autoPlayNext) {
+        try { next = await invoke('get_autoplay_track'); }
+        catch (error) { autoplayError = error; }
+      }
       if (next) {
         await handlePlayTrack(next);
         await loadQueue();
       } else {
         await invoke('skip_track');
+        if (autoplayError) showNotice(typeof autoplayError === 'string' ? autoplayError : (autoplayError?.message || 'Autoplay recommendations are unavailable right now'));
       }
     }
     catch (error: any) { showNotice(typeof error === 'string' ? error : (error?.message || 'Could not skip track')); }
@@ -457,8 +596,13 @@
         showNotice(action === 'play-next' ? 'Added as the next song' : `Added to queue · ${count} queued`);
       } else if (action.startsWith('playlist:')) {
         const playlistId = action.slice('playlist:'.length);
-        await invoke('add_track_to_playlist', { trackId, playlistId });
+        if (playlistId.startsWith('NOVA_LOCAL_')) {
+          await invoke('add_track_to_local_playlist', { track, playlistId });
+        } else {
+          await invoke('add_track_to_playlist', { trackId, playlistId });
+        }
         window.dispatchEvent(new CustomEvent('nova-playlist-updated', { detail: playlistId }));
+        window.dispatchEvent(new CustomEvent('nova-local-playlists-changed'));
         showNotice('Added to playlist');
       } else if (action === 'download') {
         const path: string = await invoke('download_track', { trackId, title: track?.title || track?.name || 'NOVA Music download' });
@@ -583,7 +727,8 @@
     }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
       event.preventDefault();
-      navigate('search');
+      globalSearchInput?.focus();
+      searchPopoverOpen = true;
       return;
     }
     if (event.code !== 'Space' || target?.matches('input, textarea, button, [contenteditable="true"]')) return;
@@ -622,11 +767,64 @@
       </button>
     </div>
 
-    <button class="global-search" on:click={() => navigate('search')} aria-label="Open search">
-      <Search size={17} />
-      <span>What do you want to play?</span>
-      <kbd>⌘ K</kbd>
-    </button>
+    <div class="global-search-wrap">
+      <div class="global-search" class:focused={searchPopoverOpen}>
+        <Search size={17} />
+        <input
+          bind:this={globalSearchInput}
+          bind:value={globalSearchQuery}
+          on:input={handleGlobalSearchInput}
+          on:focus={() => { searchPopoverOpen = true; }}
+          on:keydown={handleGlobalSearchKeydown}
+          placeholder="What do you want to play?"
+          aria-label="Search YouTube Music"
+          aria-expanded={searchPopoverOpen}
+          aria-controls="global-search-results"
+        />
+        <kbd>⌘ K</kbd>
+      </div>
+      {#if searchPopoverOpen && globalSearchQuery.trim().length >= 2}
+        <div id="global-search-results" class="global-search-popover" in:fly={{ y: -7, duration: 170 }}>
+          <div class="search-popover-heading"><span>SEARCH YOUTUBE MUSIC</span><button on:click={() => searchPopoverOpen = false} aria-label="Close search results"><X size={15} /></button></div>
+          {#if globalSearchLoading}
+            <div class="search-popover-state"><span class="search-popover-spinner"></span><span>Finding music…</span></div>
+          {:else if globalSearchError}
+            <div class="search-popover-state error">{globalSearchError}</div>
+          {:else if globalSearchResults}
+            {#if quickSearchSongs.length}
+              <div class="search-popover-section"><span class="search-popover-label">SONGS</span>
+                {#each quickSearchSongs as item (item.id || item.videoId)}
+                  <div class="search-result-row">
+                    <button class="search-result-main" on:click={() => chooseGlobalSearchResult(item, 'song')}>
+                      <img src={item.thumbnail || '/placeholder.jpg'} alt="" />
+                      <span class="search-result-copy"><strong>{item.title || 'Untitled track'}</strong><small>{item.artist || item.artists || 'YouTube Music'}</small></span>
+                      <Play size={15} fill="currentColor" />
+                    </button>
+                    <TrackActions track={item} playlists={libraryCollections.playlists} onAction={handleTrackAction} />
+                  </div>
+                {/each}
+              </div>
+            {/if}
+            {#if quickSearchCollections.length}
+              <div class="search-popover-section collection-results"><span class="search-popover-label">MORE RESULTS</span>
+                {#each quickSearchCollections as item (`${item.resultKind}:${item.id}`)}
+                  <button class="search-collection-result" on:click={() => chooseGlobalSearchResult(item, item.resultKind)}>
+                    <img src={item.thumbnail || '/placeholder.jpg'} alt="" />
+                    <span><strong>{item.title || 'Untitled'}</strong><small>{item.resultKind}</small></span>
+                  </button>
+                {/each}
+              </div>
+            {/if}
+            {#if !quickSearchSongs.length && !quickSearchCollections.length}
+              <div class="search-popover-state">No results found for “{globalSearchQuery.trim()}”.</div>
+            {/if}
+            <button class="search-view-all" on:click={openFullSearch}>Show all results for “{globalSearchQuery.trim()}” <ChevronRight size={15} /></button>
+          {:else}
+            <div class="search-popover-state">Search songs, artists, albums, and playlists.</div>
+          {/if}
+        </div>
+      {/if}
+    </div>
 
     <div class="topbar-actions" data-tauri-drag-region>
       <button class="chrome-button library-toggle" class:selected={librarySidebarOpen} on:click={() => librarySidebarOpen = !librarySidebarOpen} aria-label="Toggle your library">
@@ -651,9 +849,6 @@
       <div class="rail-separator"></div>
       <button class="rail-button" class:selected={activeTab === 'home' && !showNowPlaying} on:click={() => navigate('home')} aria-label="Home" title="Home">
         <HomeIcon size={19} />
-      </button>
-      <button class="rail-button" class:selected={activeTab === 'search'} on:click={() => navigate('search')} aria-label="Search" title="Search">
-        <Search size={19} />
       </button>
       <button class="rail-button" class:selected={activeTab === 'library'} on:click={() => { navigate('library'); librarySidebarOpen = true; }} aria-label="Library" title="Library">
         <Library size={19} />
@@ -691,7 +886,6 @@
           <button class="filter-chip" class:active={libraryCategory === 'artists'} on:click={() => libraryCategory = 'artists'}>Artists</button>
         </div>
         <div class="library-tools">
-          <button class="icon-button" aria-label="Search your library" on:click={() => navigate('search')}><Search size={15} /></button>
           <button class="sort-button" on:click={() => navigate('library')}>Recently added <ListEnd size={14} /></button>
         </div>
         <div class="library-list">
@@ -719,12 +913,12 @@
     {/if}
 
     <main class="main-content" class:panel-open={sidePanel !== null}>
-      {#key `${activeTab}:${activePlaylistId || ''}:${activeArtistId}`}
+      {#key `${activeTab}:${activePlaylistId || ''}:${activeArtistId}:${activeTab === 'search' ? globalSearchQuery : ''}`}
       <div class="route-layer" in:fly={{ y: 8, duration: 230 }} out:fade={{ duration: 115 }}>
       {#if activeTab === 'home'}
         <Home accountName={accountName} onPlayTrack={handlePlayTrack} onOpenPlaylist={handleOpenPlaylist} onOpenArtist={handleOpenArtist} onTrackAction={handleTrackAction} playlistOptions={libraryCollections.playlists} />
       {:else if activeTab === 'search'}
-        <SearchPage onPlayTrack={handlePlayTrack} onOpenPlaylist={handleOpenPlaylist} onOpenArtist={handleOpenArtist} onTrackAction={handleTrackAction} playlistOptions={libraryCollections.playlists} />
+        <SearchPage initialQuery={globalSearchQuery} onPlayTrack={handlePlayTrack} onOpenPlaylist={handleOpenPlaylist} onOpenArtist={handleOpenArtist} onTrackAction={handleTrackAction} playlistOptions={libraryCollections.playlists} />
       {:else if activeTab === 'library'}
         <LibraryPage onPlayTrack={handlePlayTrack} onOpenPlaylist={handleOpenPlaylist} onOpenArtist={handleOpenArtist} onTrackAction={handleTrackAction} playlistOptions={libraryCollections.playlists} />
       {:else if activeTab === 'playlists'}
@@ -1001,6 +1195,8 @@
   :global(.app-shell.theme-cyber), :global(.app-shell.theme-deepspace) { --accent: rgb(var(--cover-rgb)); --accent-soft: rgba(var(--cover-rgb), .16); }
 
   .topbar {
+    position: relative;
+    z-index: 30;
     height: 56px;
     flex: 0 0 56px;
     display: flex;
@@ -1012,7 +1208,6 @@
     box-shadow: inset 0 1px 0 rgba(255,255,255,.09), 0 12px 28px rgba(0,0,0,.13);
     -webkit-backdrop-filter: blur(26px) saturate(1.3);
     backdrop-filter: blur(26px) saturate(1.3);
-    z-index: 5;
   }
   .traffic-light-clearance { width: 66px; height: 100%; flex: 0 0 66px; }
   .topbar-history, .topbar-actions { display: flex; align-items: center; gap: 8px; }
@@ -1031,10 +1226,10 @@
   .chrome-button:hover, .icon-button:hover, .player-small-action:hover, .transport-button:hover { color: #fff; background: rgba(255,255,255,.09); }
   .chrome-button:disabled { opacity: .35; cursor: default; }
   .refresh-button { margin-left: 5px; }
+  .global-search-wrap { position: relative; width: min(460px, 42vw); margin: 0 auto; }
   .global-search {
     height: 38px;
-    width: min(460px, 42vw);
-    margin: 0 auto;
+    width: 100%;
     display: flex;
     align-items: center;
     gap: 11px;
@@ -1046,12 +1241,36 @@
     box-shadow: inset 0 1px 0 rgba(255,255,255,.1), inset 0 0 0 1px rgba(255,255,255,.025);
     -webkit-backdrop-filter: blur(18px) saturate(1.25);
     backdrop-filter: blur(18px) saturate(1.25);
-    text-align: left;
-    cursor: pointer;
+    transition: border-color .16s ease, background .16s ease, box-shadow .16s ease;
   }
-  .global-search:hover { background: #232525; border-color: rgba(255,255,255,.18); }
-  .global-search span { flex: 1; font-size: 13px; }
+  .global-search:hover, .global-search.focused { background: #202222; border-color: rgba(255,255,255,.2); box-shadow: 0 0 0 3px rgba(var(--cover-rgb),.08), inset 0 1px 0 rgba(255,255,255,.1); }
+  .global-search input { min-width: 0; flex: 1; color: #f0f2f2; background: transparent; border: 0; outline: 0; font-size: 13px; }
+  .global-search input::placeholder { color: #bfc1c1; opacity: 1; }
   .global-search kbd { color: #8c8f8f; font-size: 10px; border: 1px solid #454747; border-radius: 4px; padding: 2px 5px; }
+  .global-search-popover { position: absolute; z-index: 100; top: calc(100% + 10px); left: 50%; width: min(580px, calc(100vw - 32px)); max-height: min(72vh, 650px); overflow: auto; padding: 11px; color: #f2f3f3; background: #111313; border: 1px solid rgba(255,255,255,.13); border-radius: 14px; box-shadow: 0 24px 70px rgba(0,0,0,.72), inset 0 1px rgba(255,255,255,.05); transform: translateX(-50%); }
+  .search-popover-heading { display: flex; align-items: center; justify-content: space-between; padding: 5px 7px 10px; color: #858b8b; font-size: 9px; font-weight: 800; letter-spacing: .12em; }
+  .search-popover-heading button { display: grid; place-items: center; width: 26px; height: 26px; color: #9da2a2; background: transparent; border: 0; border-radius: 50%; cursor: pointer; }
+  .search-popover-heading button:hover { color: #fff; background: #252828; }
+  .search-popover-section { display: flex; flex-direction: column; gap: 2px; padding: 4px 0 7px; }
+  .search-popover-label { padding: 5px 8px; color: #777e7e; font-size: 9px; font-weight: 800; letter-spacing: .1em; }
+  .search-result-row { position: relative; display: flex; align-items: center; border-radius: 8px; }
+  .search-result-row:hover { background: #1b1e1e; }
+  .search-result-main { min-width: 0; flex: 1; display: flex; align-items: center; gap: 11px; padding: 7px 10px; color: #e9ebeb; text-align: left; background: transparent; border: 0; border-radius: 8px; cursor: pointer; }
+  .search-result-main > img, .search-collection-result > img { width: 42px; height: 42px; flex: 0 0 42px; object-fit: cover; background: #202323; border-radius: 6px; }
+  .search-result-copy, .search-collection-result > span { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; }
+  .search-result-copy strong, .search-collection-result strong { overflow: hidden; color: #f0f2f2; font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+  .search-result-copy small, .search-collection-result small { overflow: hidden; color: #949a9a; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+  .search-result-main > :global(svg) { margin: 0 5px; color: var(--accent); opacity: 0; transition: opacity .15s ease; }
+  .search-result-row:hover .search-result-main > :global(svg) { opacity: 1; }
+  .search-collection-result { min-width: 0; display: flex; align-items: center; gap: 10px; padding: 7px 9px; color: #eee; text-align: left; background: transparent; border: 0; border-radius: 8px; cursor: pointer; }
+  .search-collection-result:hover { background: #1b1e1e; }
+  .search-collection-result > img { width: 36px; height: 36px; flex-basis: 36px; border-radius: 50%; }
+  .search-popover-state { min-height: 58px; display: flex; align-items: center; gap: 10px; padding: 12px; color: #9ca2a2; font-size: 12px; }
+  .search-popover-state.error { color: #ffb6b6; }
+  .search-popover-spinner { width: 15px; height: 15px; border: 2px solid #454a4a; border-top-color: #f0f2f2; border-radius: 50%; animation: search-spin .7s linear infinite; }
+  @keyframes search-spin { to { transform: rotate(360deg); } }
+  .search-view-all { width: 100%; min-height: 38px; display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 5px; color: #e6e8e8; background: #1b1e1e; border: 1px solid rgba(255,255,255,.07); border-radius: 9px; font-size: 11px; font-weight: 650; cursor: pointer; }
+  .search-view-all:hover { background: #252929; }
   .topbar-actions { min-width: 225px; justify-content: flex-end; }
   .library-toggle.selected { color: var(--accent); }
   .profile-button {
@@ -1215,9 +1434,10 @@
   .panel-artist-info strong { font-size: 12px; }
   .panel-artist-info span { color: #d0d6d2; font-size: 11px; }
 
-  .immersive-player { position: fixed; z-index: 15; inset: 0; display: flex; flex-direction: column; overflow: hidden; color: #fff; background: radial-gradient(ellipse at 20% 22%, rgba(var(--cover-rgb),.2), transparent 45%), #0b0b0d; isolation: isolate; }
-  .immersive-backdrop { position: absolute; z-index: -2; inset: -70px; background-position: center; background-size: cover; filter: blur(70px) saturate(.82); opacity: .47; transform: scale(1.12); }
-  .immersive-glass-wash { position: absolute; z-index: -1; inset: 0; background: radial-gradient(ellipse at 23% 35%, rgba(var(--cover-rgb),.23), transparent 44%), radial-gradient(ellipse at 78% 74%, rgba(var(--cover-deep-rgb),.48), transparent 52%), linear-gradient(122deg, rgba(10,10,12,.48), rgba(11,12,14,.82) 68%), linear-gradient(180deg, rgba(14,12,15,.12), #0c0b0d 96%); backdrop-filter: saturate(1.28); transition: background 700ms ease; }
+  .immersive-player { position: fixed; z-index: 15; inset: 0; display: flex; flex-direction: column; overflow: hidden; color: #fff; background: linear-gradient(128deg, color-mix(in srgb, rgb(var(--cover-rgb)) 23%, #111313), #0b0c0c 58%, color-mix(in srgb, rgb(var(--cover-deep-rgb)) 42%, #101111)); isolation: isolate; }
+  .immersive-backdrop { position: absolute; z-index: 0; inset: -70px; background-position: center; background-size: cover; filter: blur(70px) saturate(.82); opacity: .18; transform: scale(1.12); pointer-events: none; }
+  .immersive-glass-wash { position: absolute; z-index: 1; inset: 0; background: linear-gradient(112deg, rgba(7,8,8,.82), rgba(10,12,12,.71) 64%, rgba(8,9,9,.82)); pointer-events: none; transition: background 700ms ease; }
+  .immersive-header, .immersive-content, .immersive-controls { position: relative; z-index: 2; }
   .immersive-header { height: 68px; flex: 0 0 68px; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 4px clamp(18px, 3vw, 48px) 0; }
   .immersive-close { width: 40px; height: 40px; display: grid; place-items: center; justify-self: start; color: rgba(255,255,255,.78); background: rgba(255,255,255,.075); border: 1px solid rgba(255,255,255,.1); border-radius: 50%; cursor: pointer; backdrop-filter: blur(18px); transition: background .18s ease, transform .18s ease; }
   .immersive-close:last-child { justify-self: end; }
@@ -1245,7 +1465,7 @@
   .immersive-secondary-action { display: inline-flex; align-items: center; gap: 8px; padding: 9px 12px; color: rgba(255,255,255,.82); background: rgba(255,255,255,.075); border: 1px solid rgba(255,255,255,.1); border-radius: 20px; font-size: 11px; cursor: pointer; backdrop-filter: blur(18px); }
   .immersive-secondary-action:hover { background: rgba(255,255,255,.14); }
   .immersive-secondary-action span { min-width: 17px; padding: 2px 5px; color: #fff; background: rgba(255,255,255,.13); border-radius: 10px; text-align: center; font-size: 9px; }
-  .immersive-lyrics { min-width: 0; height: min(100%, 650px); display: flex; flex-direction: column; overflow: hidden; padding: clamp(22px, 3vw, 40px); background: linear-gradient(145deg, rgba(255,255,255,.085), rgba(255,255,255,.025)); border: 1px solid rgba(255,255,255,.11); border-radius: 18px; box-shadow: inset 0 1px 0 rgba(255,255,255,.13), 0 24px 65px rgba(0,0,0,.21); backdrop-filter: blur(32px) saturate(1.35); }
+  .immersive-lyrics { min-width: 0; height: min(100%, 650px); display: flex; flex-direction: column; overflow: hidden; padding: clamp(22px, 3vw, 40px); background: linear-gradient(145deg, color-mix(in srgb, rgb(var(--cover-rgb)) 17%, #181a1a), #141616 68%, color-mix(in srgb, rgb(var(--cover-deep-rgb)) 24%, #171818)); border: 1px solid rgba(255,255,255,.11); border-radius: 18px; box-shadow: inset 0 1px 0 rgba(255,255,255,.13), 0 24px 65px rgba(0,0,0,.32); }
   .immersive-lyrics-header { display: flex; align-items: center; justify-content: space-between; padding: 0 2px 15px; border-bottom: 1px solid rgba(255,255,255,.1); }
   .immersive-lyrics-header h2 { margin: 5px 0 0; color: #fff; font-size: 24px; letter-spacing: -.035em; }
   .lyrics-source { padding: 6px 9px; color: rgba(255,255,255,.66); background: rgba(255,255,255,.075); border: 1px solid rgba(255,255,255,.08); border-radius: 12px; font-size: 9px; }

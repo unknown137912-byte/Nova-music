@@ -15,6 +15,7 @@
   let error: string | null = null;
   let homeData: any = null;
   let recentTracks: any[] = [];
+  let listeningMix: any = null;
   let activeChipParams: string | null = null;
   let refreshListener: (() => void) | undefined;
   let currentGreeting = 'Good evening';
@@ -47,6 +48,7 @@
     const requests = await Promise.allSettled([
       invoke('get_home', { params: params || null }),
       invoke('get_settings'),
+      invoke('get_listening_recommendations'),
     ]);
 
     if (requests[0].status === 'fulfilled') {
@@ -59,9 +61,11 @@
     const settings: any = requests[1].status === 'fulfilled' ? requests[1].value : {};
     if (settings?.history_enabled === 'false') {
       recentTracks = [];
+      listeningMix = null;
     } else {
       try { recentTracks = normalizeHistory(await invoke('get_history')).slice(0, 8); }
       catch (_) { recentTracks = []; }
+      listeningMix = requests[2].status === 'fulfilled' ? requests[2].value : null;
     }
     loading = false;
   }
@@ -125,7 +129,14 @@
   }
 
   $: greetingName = accountName ? accountName.split('@')[0] : 'there';
-  $: sections = homeData?.sections || [];
+  $: sections = [
+    ...(homeData?.sections || []),
+    ...(listeningMix?.items?.length ? [{
+      id: 'nova-listening-mix',
+      title: listeningMix.seed?.artist ? `Because you listen to ${listeningMix.seed.artist}` : 'Picked for your taste',
+      items: listeningMix.items,
+    }] : []),
+  ];
 </script>
 
 <div class="home-container">

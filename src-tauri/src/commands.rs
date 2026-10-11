@@ -36,6 +36,14 @@ pub async fn get_playlist(
     playlist_id: String,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
+    if playlist_id.starts_with("NOVA_LOCAL_") {
+        return state
+            .db
+            .get_local_playlist(&playlist_id)
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "This local playlist no longer exists.".to_string());
+    }
     let access_token = crate::auth::ensure_access_token(&state)
         .await
         .ok()
@@ -92,6 +100,11 @@ pub async fn get_library(state: State<'_, AppState>) -> Result<serde_json::Value
         .await
         .ok()
         .flatten();
+    let local_playlists = state
+        .db
+        .get_local_playlists()
+        .await
+        .map_err(|error| error.to_string())?;
     let client = metadata_client()?;
     if state.innertube.is_logged_in() {
         let (playlists, albums, artists) = tokio::join!(
@@ -100,7 +113,7 @@ pub async fn get_library(state: State<'_, AppState>) -> Result<serde_json::Value
             state.innertube.library_artists(&client),
         );
         if playlists.is_ok() || albums.is_ok() || artists.is_ok() {
-            let playlists: Vec<serde_json::Value> = match playlists {
+            let mut playlists: Vec<serde_json::Value> = match playlists {
                 Ok(items) => items
                     .into_iter()
                     .filter_map(|item| serde_json::to_value(item).ok())
@@ -112,6 +125,7 @@ pub async fn get_library(state: State<'_, AppState>) -> Result<serde_json::Value
                     None => Vec::new(),
                 },
             };
+            playlists.extend(local_playlists);
             return Ok(serde_json::json!({
                 "playlists": playlists,
                 "albums": albums.unwrap_or_default(),
@@ -121,28 +135,240 @@ pub async fn get_library(state: State<'_, AppState>) -> Result<serde_json::Value
         }
     }
     if let Some(token) = access_token {
-        let playlists = crate::auth::youtube_data_playlists(&token).await?;
+        let mut playlists = crate::auth::youtube_data_playlists(&token).await?;
+        playlists.extend(local_playlists);
         return Ok(
             serde_json::json!({"playlists": playlists, "songs": [], "albums": [], "artists": []}),
         );
     }
     match state.db.get_library().await {
-        Ok(lib) => Ok(lib),
+        Ok(mut library) => {
+            if let Some(playlists) = library
+                .get_mut("playlists")
+                .and_then(serde_json::Value::as_array_mut)
+            {
+                playlists.extend(local_playlists);
+            }
+            Ok(library)
+        }
         Err(e) => Err(e.to_string()),
     }
 }
 
 #[tauri::command]
+pub async fn create_local_playlist(
+    title: String,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let title = title.trim();
+    if title.is_empty() || title.chars().count() > 80 {
+        return Err("Playlist names must contain 1 to 80 characters.".into());
+    }
+    let id = state
+        .db
+        .create_local_playlist(title)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(
+        serde_json::json!({ "id": id, "playlistId": id, "title": title, "trackCount": 0, "isLocal": true }),
+    )
+}
+
+#[tauri::command]
+pub async fn add_track_to_local_playlist(
+    playlist_id: String,
+    track: serde_json::Value,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    if !playlist_id.starts_with("NOVA_LOCAL_") {
+        return Err("Choose a local NOVA playlist.".into());
+    }
+    let track_id = track
+        .get("videoId")
+        .or_else(|| track.get("video_id"))
+        .or_else(|| track.get("trackId"))
+        .or_else(|| track.get("track_id"))
+        .or_else(|| track.get("id"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+        .ok_or_else(|| "This song is missing its YouTube track ID.".to_string())?;
+    let title = track
+        .get("title")
+        .or_else(|| track.get("name"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("Unknown track");
+    let artist = track
+        .get("artist")
+        .or_else(|| track.get("artists"))
+        .or_else(|| track.get("subtitle"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("YouTube Music");
+    let thumbnail = track
+        .get("thumbnail")
+        .or_else(|| track.get("thumbnail_url"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let duration = track
+        .get("duration_seconds")
+        .or_else(|| track.get("duration"))
+        .and_then(|value| {
+            value.as_f64().or_else(|| {
+                value.as_str().and_then(|text| {
+                    let parts = text
+                        .split(':')
+                        .map(str::parse::<f64>)
+                        .collect::<Result<Vec<_>, _>>()
+                        .ok()?;
+                    match parts.as_slice() {
+                        [minutes, seconds] => Some(minutes * 60.0 + seconds),
+                        [hours, minutes, seconds] => {
+                            Some(hours * 3600.0 + minutes * 60.0 + seconds)
+                        }
+                        _ => None,
+                    }
+                })
+            })
+        })
+        .unwrap_or(0.0);
+    state
+        .db
+        .add_track_to_local_playlist(&playlist_id, track_id, title, artist, thumbnail, duration)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_local_playlist(
+    playlist_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    if !playlist_id.starts_with("NOVA_LOCAL_") {
+        return Err("Only NOVA-created playlists can be deleted here.".into());
+    }
+    if state
+        .db
+        .delete_local_playlist(&playlist_id)
+        .await
+        .map_err(|error| error.to_string())?
+    {
+        Ok(())
+    } else {
+        Err("This local playlist no longer exists.".into())
+    }
+}
+
+#[tauri::command]
 pub async fn get_history(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    if state
+        .db
+        .get_setting("history_enabled")
+        .await
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("false")
+    {
+        return Ok(serde_json::json!([]));
+    }
     let _ = crate::auth::ensure_access_token(&state).await;
     let client = metadata_client()?;
     if state.innertube.is_logged_in() {
         match state.innertube.history(&client).await {
-            Ok(hist) => return serde_json::to_value(&hist).map_err(|e| e.to_string()),
+            Ok(hist) if !hist.is_empty() => {
+                let local = state
+                    .db
+                    .get_local_history(100)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                if local.is_empty() {
+                    return serde_json::to_value(&hist).map_err(|e| e.to_string());
+                }
+                let mut groups = vec![serde_json::json!({
+                    "header": "Recently played in NOVA",
+                    "items": local,
+                })];
+                groups.extend(
+                    serde_json::to_value(hist)
+                        .map_err(|error| error.to_string())?
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default(),
+                );
+                return Ok(serde_json::json!(groups));
+            }
             Err(e) => tracing::warn!("history error: {e}"),
+            _ => {}
         }
     }
-    Ok(serde_json::json!([]))
+    state
+        .db
+        .get_local_history(100)
+        .await
+        .map(|history| serde_json::json!(history))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_listening_recommendations(
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    if state
+        .db
+        .get_setting("history_enabled")
+        .await
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("false")
+    {
+        return Ok(serde_json::json!([]));
+    }
+    let seed = state
+        .db
+        .get_top_listened_track()
+        .await
+        .map_err(|e| e.to_string())?;
+    let Some(seed) = seed else {
+        return Ok(serde_json::json!([]));
+    };
+    let Some(video_id) = seed.get("videoId").and_then(serde_json::Value::as_str) else {
+        return Ok(serde_json::json!([]));
+    };
+    let _ = crate::auth::ensure_access_token(&state).await;
+    let client = metadata_client()?;
+    let page = match state.innertube.next(&client, Some(video_id), None).await {
+        Ok(page) => page,
+        Err(error) => {
+            tracing::warn!("listening recommendations error: {error}");
+            return Ok(serde_json::json!({ "seed": seed, "items": [] }));
+        }
+    };
+    let items = if page.items.len() <= 1 {
+        if let Some(radio) = page.automix_playlist_id.as_deref() {
+            match state
+                .innertube
+                .next(&client, Some(video_id), Some(radio))
+                .await
+            {
+                Ok(continued) => continued.items,
+                Err(_) => page.items,
+            }
+        } else {
+            page.items
+        }
+    } else {
+        page.items
+    };
+    let tracks = items
+        .into_iter()
+        .filter(|item| item.video_id != video_id)
+        .take(18)
+        .map(|item| serde_json::to_value(item).map_err(|e| e.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(serde_json::json!({
+        "seed": seed,
+        "items": tracks,
+    }))
 }
 
 #[tauri::command]
@@ -374,13 +600,33 @@ pub async fn play_track(
         .map_err(|e| format!("Player play error: {e}"))?;
 
     let track_info = serde_json::json!({
-        "id": track_id,
+        "id": track_id.clone(),
         "title": title.or(resolved.title).unwrap_or_else(|| "Playing Track".into()),
         "artist": artist.unwrap_or_else(|| "YouTube Music".into()),
         "thumbnail": thumbnail.unwrap_or_else(|| "/placeholder.jpg".into()),
         "duration": duration.or(resolved.duration).unwrap_or(180.0),
         "url": play_url,
     });
+    if state
+        .db
+        .get_setting("history_enabled")
+        .await
+        .ok()
+        .flatten()
+        .as_deref()
+        != Some("false")
+    {
+        let _ = state
+            .db
+            .record_local_play(
+                &track_id,
+                track_info["title"].as_str().unwrap_or("Playing Track"),
+                track_info["artist"].as_str().unwrap_or("YouTube Music"),
+                track_info["thumbnail"].as_str().unwrap_or(""),
+                track_info["duration"].as_f64().unwrap_or(0.0),
+            )
+            .await;
+    }
     *state.current_track.lock().unwrap() = Some(track_info.clone());
     Ok(track_info)
 }
@@ -566,10 +812,16 @@ pub async fn enqueue_track(
         .and_then(|value| {
             value.as_f64().or_else(|| {
                 value.as_str().and_then(|text| {
-                    let parts = text.split(':').map(str::parse::<f64>).collect::<Result<Vec<_>, _>>().ok()?;
+                    let parts = text
+                        .split(':')
+                        .map(str::parse::<f64>)
+                        .collect::<Result<Vec<_>, _>>()
+                        .ok()?;
                     match parts.as_slice() {
                         [minutes, seconds] => Some(minutes * 60.0 + seconds),
-                        [hours, minutes, seconds] => Some(hours * 3600.0 + minutes * 60.0 + seconds),
+                        [hours, minutes, seconds] => {
+                            Some(hours * 3600.0 + minutes * 60.0 + seconds)
+                        }
                         _ => None,
                     }
                 })
@@ -604,6 +856,69 @@ pub async fn dequeue_next_track(
     } else {
         Ok(Some(queue.remove(0)))
     }
+}
+
+#[tauri::command]
+pub async fn get_autoplay_track(
+    state: State<'_, AppState>,
+) -> Result<Option<serde_json::Value>, String> {
+    {
+        let mut queue = state.queue.lock().map_err(|error| error.to_string())?;
+        if !queue.is_empty() {
+            return Ok(Some(queue.remove(0)));
+        }
+    }
+    let current = state
+        .current_track
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone();
+    let Some(current) = current else {
+        return Ok(None);
+    };
+    let Some(video_id) = current.get("id").and_then(serde_json::Value::as_str) else {
+        return Ok(None);
+    };
+    let _ = crate::auth::ensure_access_token(&state).await;
+    let metadata = metadata_client()?;
+    let page = state
+        .innertube
+        .next(&metadata, Some(video_id), None)
+        .await
+        .map_err(|error| format!("Could not load YouTube Music autoplay: {error}"))?;
+    let items = if page.items.len() <= 1 {
+        if let Some(radio) = page.automix_playlist_id.as_deref() {
+            match state
+                .innertube
+                .next(&metadata, Some(video_id), Some(radio))
+                .await
+            {
+                Ok(continued) => continued.items,
+                Err(_) => page.items,
+            }
+        } else {
+            page.items
+        }
+    } else {
+        page.items
+    };
+    let mut recommendations = items
+        .into_iter()
+        .filter(|item| item.video_id != video_id)
+        .map(|item| serde_json::to_value(item).map_err(|error| error.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
+    if recommendations.is_empty() {
+        return Ok(None);
+    }
+
+    // If a song was queued while the network request was in flight, honor that user choice.
+    let mut queue = state.queue.lock().map_err(|error| error.to_string())?;
+    if !queue.is_empty() {
+        return Ok(Some(queue.remove(0)));
+    }
+    let next = recommendations.remove(0);
+    queue.extend(recommendations);
+    Ok(Some(next))
 }
 
 #[tauri::command]
@@ -916,6 +1231,63 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<serde_json::Valu
     }
 }
 
+fn directory_size(path: &std::path::Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return 0;
+    };
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| {
+            let Ok(file_type) = entry.file_type() else {
+                return 0;
+            };
+            if file_type.is_dir() {
+                directory_size(&entry.path())
+            } else if file_type.is_file() {
+                entry.metadata().map(|metadata| metadata.len()).unwrap_or(0)
+            } else {
+                0
+            }
+        })
+        .sum()
+}
+
+#[tauri::command]
+pub async fn get_storage_info(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let database_path = state.app_data_dir.join("novamusic.sqlite");
+    let database_bytes = std::fs::metadata(&database_path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    let cache_bytes = directory_size(&state.audio_cache_dir);
+    let download_directory = state
+        .db
+        .get_setting("download_directory")
+        .await
+        .ok()
+        .flatten()
+        .filter(|value| !value.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::var_os("HOME")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(std::env::temp_dir)
+                .join("Music")
+                .join("NOVA Music Downloads")
+        });
+    Ok(serde_json::json!({
+        "databaseBytes": database_bytes,
+        "playbackCacheBytes": cache_bytes,
+        "downloadsBytes": directory_size(&download_directory),
+        "databasePath": database_path.to_string_lossy(),
+        "downloadDirectory": download_directory.to_string_lossy(),
+    }))
+}
+
+#[tauri::command]
+pub async fn optimize_database(state: State<'_, AppState>) -> Result<(), String> {
+    state.db.optimize().await.map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 pub async fn update_settings(
     key: String,
@@ -928,7 +1300,9 @@ pub async fn update_settings(
         {
             return Err("Choose high, medium, low, or auto audio quality.".into());
         }
-        "replay_gain" | "gapless" if !matches!(value.as_str(), "true" | "false") => {
+        "replay_gain" | "gapless" | "auto_play_next" | "history_enabled"
+            if !matches!(value.as_str(), "true" | "false") =>
+        {
             return Err("This setting must be true or false.".into());
         }
         "google_oauth_client_id"

@@ -1,6 +1,6 @@
 {
   "name": "nova-music",
-  "version": "1.0.4",
+  "version": "1.1.0",
   "description": "NOVA Music desktop app",
   "private": true,
   "scripts": {

@@ -1,4 +1,5 @@
 <script lang="ts">
+import { onMount } from 'svelte';
 import { invoke } from '@tauri-apps/api/core';
 import TrackActions from '../../lib/TrackActions.svelte';
 
@@ -7,12 +8,18 @@ export let onOpenPlaylist: (id: string) => void = () => {};
 export let onOpenArtist: (id: string) => void = () => {};
 export let onTrackAction: (track: any, action: string) => void = () => {};
 export let playlistOptions: any[] = [];
+export let initialQuery = '';
 
 let query = '';
 let loading = false;
 let error: string | null = null;
 let results: any = null;
 let activeFilter = 'all';
+
+onMount(() => {
+  query = initialQuery.trim();
+  if (query) void performSearch();
+});
 
 async function performSearch() {
   if (!query.trim()) return;
@@ -26,12 +33,6 @@ async function performSearch() {
     console.error('Search failed:', err);
     error = typeof err === 'string' ? err : (err?.message || 'Search failed');
     loading = false;
-  }
-}
-
-function handleKeyDown(e: KeyboardEvent) {
-  if (e.key === 'Enter') {
-    performSearch();
   }
 }
 
@@ -56,27 +57,12 @@ function parseDuration(dStr: string): number {
 </script>
 
 <div class="search-container">
-  <!-- Search Input Bar -->
-  <div class="search-hero">
-    <div class="search-bar-wrapper">
-      <span class="search-icon">⌕</span>
-      <input
-        type="text"
-        bind:value={query}
-        on:keydown={handleKeyDown}
-        placeholder="Search songs, artists, albums, or playlists across YouTube Music..."
-        class="search-input"
-      />
-      {#if query}
-        <button class="clear-btn" on:click={() => { query = ''; results = null; }}>✕</button>
-      {/if}
-      <button class="search-action-btn" on:click={performSearch} disabled={loading}>
-        {loading ? 'Searching...' : 'Explore'}
-      </button>
-    </div>
+  <header class="search-results-heading">
+    <div><span>DISCOVER</span><h1>Search results</h1><p>{query ? `Showing matches for “${query}”` : 'Use the search field above to find songs, artists, albums, and playlists.'}</p></div>
+  </header>
 
-    <!-- Category filter tabs -->
-    {#if results}
+  <!-- Filters stay on the results view; the only search field lives in the app title bar. -->
+  {#if results}
       <div class="filter-tabs">
         <button
           class="tab-btn {activeFilter === 'all' ? 'active' : ''}"
@@ -109,8 +95,7 @@ function parseDuration(dStr: string): number {
           Playlists ({results.playlists?.length || 0})
         </button>
       </div>
-    {/if}
-  </div>
+  {/if}
 
   <!-- Content States -->
   {#if loading}
@@ -248,73 +233,6 @@ function parseDuration(dStr: string): number {
   padding: 24px 32px 80px 32px;
   max-width: 1400px;
   margin: 0 auto;
-}
-
-.search-hero {
-  margin-bottom: 30px;
-}
-
-.search-bar-wrapper {
-  display: flex;
-  align-items: center;
-  background: rgba(24, 24, 34, 0.75);
-  border: 1px solid rgba(139, 92, 246, 0.3);
-  backdrop-filter: blur(20px);
-  border-radius: 16px;
-  padding: 6px 12px;
-  box-shadow: 0 8px 32px -4px rgba(0, 0, 0, 0.4);
-  transition: all 0.2s ease;
-}
-
-.search-bar-wrapper:focus-within {
-  border-color: #8b5cf6;
-  box-shadow: 0 8px 32px 0 rgba(139, 92, 246, 0.25);
-}
-
-.search-icon {
-  font-size: 1.3rem;
-  color: #a78bfa;
-  padding: 0 12px;
-}
-
-.search-input {
-  flex: 1;
-  background: transparent;
-  border: none;
-  outline: none;
-  color: #f8fafc;
-  font-size: 1.05rem;
-  padding: 10px 0;
-}
-
-.search-input::placeholder {
-  color: #64748b;
-}
-
-.clear-btn {
-  background: transparent;
-  border: none;
-  color: #94a3b8;
-  font-size: 0.9rem;
-  cursor: pointer;
-  padding: 8px;
-}
-
-.search-action-btn {
-  background: linear-gradient(135deg, #7c3aed, #4f46e5);
-  border: none;
-  color: #fff;
-  padding: 10px 22px;
-  border-radius: 12px;
-  font-size: 0.9rem;
-  font-weight: 600;
-  cursor: pointer;
-  margin-left: 8px;
-  transition: opacity 0.2s;
-}
-
-.search-action-btn:hover {
-  opacity: 0.9;
 }
 
 .filter-tabs {
@@ -616,15 +534,12 @@ function parseDuration(dStr: string): number {
   color: #f87171;
 }
 
-.search-container { max-width: none; margin: 0; padding: 30px clamp(24px, 4vw, 58px) 86px; color: #f3f5f4; background: radial-gradient(ellipse at 48% 0%, rgba(51,101,76,.16), transparent 42%), rgba(8,9,9,.88); }
-.search-bar-wrapper { padding: 5px 9px 5px 14px; background: linear-gradient(135deg, rgba(67,72,69,.44), rgba(25,27,26,.76)); border: 1px solid rgba(255,255,255,.1); border-radius: 24px; box-shadow: inset 0 1px 0 rgba(255,255,255,.12), 0 12px 25px rgba(0,0,0,.12); -webkit-backdrop-filter: blur(24px) saturate(1.3); backdrop-filter: blur(24px) saturate(1.3); }
-.search-bar-wrapper:focus-within { border-color: #7dbd90; box-shadow: 0 0 0 2px rgba(30,215,96,.1); }
-.search-icon { color: #aeb4b0; }
-.search-input { color: #f1f3f2; font-size: 14px; }
-.search-input::placeholder { color: #969c98; }
-.search-action-btn { color: #fff; background: var(--accent); border-radius: 20px; font-weight: 750; }
-.search-action-btn:hover { opacity: .9; }
-.filter-tabs { gap: 8px; }
+.search-container { max-width: none; min-height: 100%; margin: 0; padding: 30px clamp(24px, 4vw, 58px) 86px; color: #f3f5f4; background: #080909; }
+.search-results-heading { display: flex; align-items: end; justify-content: space-between; margin: 4px 0 22px; }
+.search-results-heading span { color: var(--accent); font-size: 9px; font-weight: 800; letter-spacing: .16em; }
+.search-results-heading h1 { margin: 7px 0 5px; color: #f4f6f5; font-size: clamp(25px, 3vw, 36px); font-weight: 750; letter-spacing: -.045em; }
+.search-results-heading p { margin: 0; color: #999f9c; font-size: 12px; }
+.filter-tabs { gap: 8px; margin-bottom: 20px; }
 .tab-btn { color: #d6dbd8; background: #202322; border: 1px solid transparent; }
 .tab-btn:hover { color: #fff; background: #2a2e2b; }
 .tab-btn.active { color: #fff; background: rgba(var(--cover-rgb, 244 107 130),.25); border-color: rgba(var(--cover-rgb, 244 107 130),.56); }
@@ -648,7 +563,4 @@ function parseDuration(dStr: string): number {
 .empty-prompt p { color: #9ba19d; }
 .cosmic-spinner { border-color: rgba(var(--cover-rgb, 244 107 130),.16); border-top-color: var(--accent); }
 .error-msg { color: #ffc7c7; background: rgba(179,43,43,.12); border-color: rgba(245,90,90,.22); }
-.search-bar-wrapper:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(var(--cover-rgb, 244 107 130),.16); }
-.search-icon { color: rgba(var(--cover-rgb, 244 107 130),.9); }
-
 </style>

@@ -1595,15 +1595,19 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let p = Player::new(dir.to_str().unwrap()).expect("libmpv");
         p.mpv().set_property("ao", "null").unwrap();
-        p.load("av://lavfi:sine=duration=5", &Default::default(), None, Some(2.0)).unwrap();
+        // Start well after zero so a broken `start=` cannot pass merely because playback
+        // advances from the beginning while this test is polling.
+        p.load("av://lavfi:sine=duration=15", &Default::default(), None, Some(8.0)).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         let pos = loop {
             if let Ok(pos) = p.mpv().get_property::<f64>("time-pos") {
-                break pos;
+                if (7.9..9.0).contains(&pos) {
+                    break pos;
+                }
             }
-            assert!(Instant::now() < deadline, "file never loaded");
+            assert!(Instant::now() < deadline, "load did not seek near 8 seconds");
             std::thread::sleep(Duration::from_millis(10));
         };
-        assert!((1.9..3.0).contains(&pos), "started at {pos}");
+        assert!((7.9..9.0).contains(&pos), "started at {pos}");
     }
 }

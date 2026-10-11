@@ -12,7 +12,6 @@ pub mod state;
 pub use innertube;
 pub use player;
 
-use db::Db;
 use state::AppState;
 use tauri::Manager;
 
@@ -79,7 +78,11 @@ pub fn run() {
             commands::get_album,
             commands::get_artist,
             commands::get_library,
+            commands::create_local_playlist,
+            commands::add_track_to_local_playlist,
+            commands::delete_local_playlist,
             commands::get_history,
+            commands::get_listening_recommendations,
             commands::get_account_info,
             commands::search,
             commands::search_suggestions,
@@ -88,6 +91,7 @@ pub fn run() {
             commands::download_track,
             commands::enqueue_track,
             commands::dequeue_next_track,
+            commands::get_autoplay_track,
             commands::pause_playback,
             commands::skip_track,
             commands::previous_track,
@@ -101,6 +105,8 @@ pub fn run() {
             commands::get_playback_state,
             commands::show_song_notification,
             commands::get_settings,
+            commands::get_storage_info,
+            commands::optimize_database,
             commands::update_settings,
             commands::start_google_sign_in,
             commands::sign_in,
@@ -116,14 +122,6 @@ pub fn run() {
             init_logging(&data_dir);
             let cache_dir = data_dir.join("audio-cache");
             std::fs::create_dir_all(&cache_dir).ok();
-
-            let _db = match Db::open(&data_dir.join("novamusic.sqlite")) {
-                Ok(v) => v,
-                Err(e) => fatal(
-                    "NOVA Music could not open or create its database",
-                    &format!("{}: {e}", data_dir.display()),
-                ),
-            };
 
             // Start loopback HTTP audio proxy for high-speed gapless streaming
             audioproxy::start();

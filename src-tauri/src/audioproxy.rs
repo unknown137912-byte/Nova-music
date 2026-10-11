@@ -567,11 +567,9 @@ mod tests {
     fn chunks_tile_the_window() {
         assert_eq!(chunk_end(0, 10 * 1024 * 1024), CHUNK - 1);
         assert_eq!(chunk_end(CHUNK, 10 * 1024 * 1024), 2 * CHUNK - 1);
-        // Last chunk is clamped to the window's inclusive last byte, not one before it.
-        assert_eq!(
-            chunk_end(8 * 1024 * 1024, 10 * 1024 * 1024),
-            10 * 1024 * 1024
-        );
+        // The final short chunk is clamped to the window's inclusive last byte.
+        let final_byte = 10 * 1024 * 1024 - 1;
+        assert_eq!(chunk_end(final_byte - 123, final_byte), final_byte);
         assert_eq!(chunk_end(0, 99), 99);
 
         let mut pos = 0u64;

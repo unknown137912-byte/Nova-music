@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import { Clock3, ListMusic, Music2, Play, Search, Sparkles } from 'lucide-svelte';
+  import { Clock3, ListMusic, Music2, Play, Search, Sparkles, Plus, Trash2 } from 'lucide-svelte';
   import TrackActions from '../../lib/TrackActions.svelte';
 
   export let activePlaylistId: string | null = null;
@@ -20,13 +20,30 @@
   let filterText = '';
   let requestedId: string | null | undefined = undefined;
   let requestVersion = 0;
+  let newPlaylistTitle = '';
+  let savingPlaylist = false;
+  let confirmingDelete = false;
+  let playlistMessage = '';
+
+  function playlistTint(source: string): string {
+    let hash = 2166136261;
+    for (let index = 0; index < source.length; index += 1) hash = Math.imul(hash ^ source.charCodeAt(index), 16777619);
+    return `hsl(${(hash >>> 0) % 360} 62% 32%)`;
+  }
 
   onMount(() => {
     const refresh = (event: Event) => {
       if (activePlaylistId && (event as CustomEvent<string>).detail === activePlaylistId) void loadCollection(activePlaylistId);
     };
     window.addEventListener('nova-playlist-updated', refresh);
-    return () => window.removeEventListener('nova-playlist-updated', refresh);
+    const refreshLibrary = () => {
+      if (!activePlaylistId) void loadOverview();
+    };
+    window.addEventListener('nova-local-playlists-changed', refreshLibrary);
+    return () => {
+      window.removeEventListener('nova-playlist-updated', refresh);
+      window.removeEventListener('nova-local-playlists-changed', refreshLibrary);
+    };
   });
 
   function displayList(value: any): any[] {
@@ -58,6 +75,8 @@
     const request = ++requestVersion;
     loading = true;
     error = '';
+    playlistMessage = '';
+    confirmingDelete = false;
     currentCollection = null;
     const isAlbum = /^(MPRE|OLAK)/i.test(id);
     const firstCommand = isAlbum ? 'get_album' : 'get_playlist';
@@ -89,6 +108,9 @@
 
   $: collectionItems = displayList(currentCollection?.items);
   $: isAlbum = Boolean(currentCollection && (currentCollection.artist || String(currentCollection.subtitle || '').toLowerCase().includes('album')));
+  $: isLocalPlaylist = Boolean(activePlaylistId?.startsWith('NOVA_LOCAL_'));
+  $: currentCover = String(currentCollection?.thumbnail || currentCollection?.cover || '');
+  $: collectionTint = playlistTint(currentCover || String(currentCollection?.id || currentCollection?.title || 'nova'));
   $: visibleItems = (category === 'Albums' ? libraryAlbums : category === 'Artists' ? libraryArtists : libraryPlaylists)
     .filter((item) => !filterText || String(item.title || item.name || '').toLowerCase().includes(filterText.toLowerCase()));
   $: totalSeconds = collectionItems.reduce((total: number, item: any) => total + durationInSeconds(item.duration), 0);
@@ -144,9 +166,43 @@
   function playFirst() {
     if (collectionItems.length) playSong(collectionItems[0]);
   }
+
+  async function createPlaylist(event: SubmitEvent) {
+    event.preventDefault();
+    const title = newPlaylistTitle.trim();
+    if (!title || savingPlaylist) return;
+    savingPlaylist = true;
+    playlistMessage = '';
+    try {
+      const playlist: any = await invoke('create_local_playlist', { title });
+      newPlaylistTitle = '';
+      window.dispatchEvent(new CustomEvent('nova-local-playlists-changed'));
+      activePlaylistId = playlist.id || playlist.playlistId;
+    } catch (reason: any) {
+      playlistMessage = typeof reason === 'string' ? reason : (reason?.message || 'Could not create playlist.');
+    } finally {
+      savingPlaylist = false;
+    }
+  }
+
+  async function deletePlaylist() {
+    if (!activePlaylistId || !isLocalPlaylist) return;
+    if (!confirmingDelete) {
+      confirmingDelete = true;
+      return;
+    }
+    try {
+      await invoke('delete_local_playlist', { playlistId: activePlaylistId });
+      confirmingDelete = false;
+      activePlaylistId = null;
+      window.dispatchEvent(new CustomEvent('nova-local-playlists-changed'));
+    } catch (reason: any) {
+      playlistMessage = typeof reason === 'string' ? reason : (reason?.message || 'Could not delete playlist.');
+    }
+  }
 </script>
 
-<div class="collections-page">
+<div class="collections-page" style={`--playlist-tint:${collectionTint}`}>
   {#if loading}
     <div class="page-state"><span class="spinner"></span><p>{activePlaylistId ? 'Opening your collection…' : 'Loading your library…'}</p></div>
   {:else if error}
@@ -166,7 +222,12 @@
           </div>
           <div class="collection-actions">
             <button class="play-collection" on:click={playFirst} disabled={!collectionItems.length}><Play size={18} fill="currentColor" /> Play</button>
+            {#if isLocalPlaylist}
+              <button class="delete-playlist" on:click={deletePlaylist}><Trash2 size={15} /> {confirmingDelete ? 'Confirm delete' : 'Delete playlist'}</button>
+              {#if confirmingDelete}<button class="cancel-delete" on:click={() => confirmingDelete = false}>Cancel</button>{/if}
+            {/if}
           </div>
+          {#if playlistMessage}<p class="playlist-message" role="alert">{playlistMessage}</p>{/if}
         </div>
       </div>
     </section>
@@ -195,8 +256,17 @@
     <div class="library-overview">
       <header class="library-overview-header">
         <div><span class="eyebrow">NOVA MUSIC</span><h1>Your Library</h1></div>
-        <label class="library-search"><Search size={16} /><input bind:value={filterText} placeholder="Search in your library" aria-label="Search your library" /></label>
+        <div class="library-tools">
+          <label class="library-search"><Search size={16} /><input bind:value={filterText} placeholder="Filter your library" aria-label="Filter your library" /></label>
+          {#if category === 'Playlists'}
+            <form class="playlist-create" on:submit={createPlaylist}>
+              <input bind:value={newPlaylistTitle} maxlength="80" placeholder="New playlist name" aria-label="New playlist name" />
+              <button type="submit" disabled={savingPlaylist || !newPlaylistTitle.trim()}><Plus size={15} /> Create</button>
+            </form>
+          {/if}
+        </div>
       </header>
+      {#if playlistMessage}<p class="playlist-message" role="alert">{playlistMessage}</p>{/if}
       <nav class="library-categories" aria-label="Library categories">
         {#each ['Playlists', 'Albums', 'Artists'] as item}
           <button class:active={category === item} on:click={() => category = item}>{item}</button>
@@ -220,9 +290,9 @@
 </div>
 
 <style>
-  .collections-page { min-height: 100%; padding-bottom: 88px; color: #f5f7f5; background: radial-gradient(ellipse at 48% 0%, rgba(45,76,61,.18), transparent 44%), #080909; }
+  .collections-page { min-height: 100%; padding-bottom: 88px; color: #f5f7f5; background: radial-gradient(ellipse at 48% 0%, color-mix(in srgb, var(--playlist-tint) 37%, transparent), transparent 52%), #080909; transition: background .35s ease; }
   .collection-hero { position: relative; isolation: isolate; min-height: 312px; display: flex; align-items: end; overflow: hidden; padding: 28px clamp(24px,4vw,58px) 26px; background: linear-gradient(180deg, rgba(8,9,9,.1), rgba(8,9,9,.5) 45%, #080909 100%); }
-  .collection-hero::before { position: absolute; z-index: -2; inset: -30px; background-image: var(--cover); background-position: center 38%; background-size: cover; filter: blur(36px) saturate(1.15); opacity: .55; transform: scale(1.15); content: ''; }
+  .collection-hero::before { position: absolute; z-index: -2; inset: -30px; background-image: radial-gradient(ellipse at center, color-mix(in srgb, var(--playlist-tint) 68%, transparent), transparent 72%), var(--cover); background-color: var(--playlist-tint); background-position: center, center 38%; background-size: cover; filter: blur(36px) saturate(1.3); opacity: .72; transform: scale(1.15); content: ''; transition: background-color .35s ease; }
   .collection-hero::after { position: absolute; z-index: -1; inset: 0; background: linear-gradient(90deg, rgba(7,8,8,.55), rgba(7,8,8,.14) 65%, rgba(7,8,8,.35)), linear-gradient(0deg, #080909 0%, rgba(8,9,9,.2) 80%); content: ''; }
   .collection-hero-content { width: 100%; display: flex; align-items: end; gap: clamp(20px,3vw,32px); }
   .collection-cover { width: clamp(150px,19vw,228px); flex: 0 0 clamp(150px,19vw,228px); aspect-ratio: 1; overflow: hidden; border: 1px solid rgba(255,255,255,.16); border-radius: 7px; box-shadow: 0 20px 42px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.2); }
@@ -288,7 +358,16 @@
   .page-state { gap: 9px; padding: 40px 20px; }
   .page-state > p { margin: 0; }
   .page-state button { margin-top: 8px; padding: 8px 14px; color: #fff; background: var(--accent); border: 0; border-radius: 18px; font-size: 11px; font-weight: 750; cursor: pointer; }
+  .library-tools { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+  .playlist-create { display: flex; align-items: center; gap: 6px; padding: 3px; background: #151817; border: 1px solid rgba(255,255,255,.09); border-radius: 22px; }
+  .playlist-create input { width: 142px; min-width: 0; padding: 0 9px; color: #f5f7f5; background: transparent; border: 0; outline: 0; font-size: 10px; }
+  .playlist-create input::placeholder { color: #929a95; }
+  .playlist-create button, .delete-playlist, .cancel-delete { min-height: 30px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 11px; color: #101211; background: #f0f3f1; border: 0; border-radius: 17px; font-size: 10px; font-weight: 750; cursor: pointer; }
+  .playlist-create button:disabled { opacity: .45; cursor: default; }
+  .delete-playlist { color: #ffd8d8; background: rgba(212,73,73,.16); border: 1px solid rgba(255,100,100,.2); }
+  .cancel-delete { color: #dce1de; background: rgba(255,255,255,.08); }
+  .playlist-message { margin: 8px 0 0; color: #ffb6b6; font-size: 11px; }
   .spinner { width: 25px; height: 25px; border: 2px solid rgba(255,255,255,.18); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  @media (max-width: 700px) { .collection-hero { min-height: 260px; padding-inline: 20px; } .collection-cover { width: 125px; flex-basis: 125px; } .collection-info h1 { font-size: 32px; } .track-table-head { grid-template-columns: 30px minmax(0,1fr) 48px 32px; gap: 8px; } .track-row { grid-template-columns: minmax(0,1fr) 32px; gap: 3px; } .track-row-main { grid-template-columns: 30px minmax(0,1fr) 48px; gap: 8px; } .plays-col { display: none; } .library-overview-header { align-items: start; flex-direction: column; } .library-search { width: 100%; } }
+  @media (max-width: 700px) { .collection-hero { min-height: 260px; padding-inline: 20px; } .collection-cover { width: 125px; flex-basis: 125px; } .collection-info h1 { font-size: 32px; } .track-table-head { grid-template-columns: 30px minmax(0,1fr) 48px 32px; gap: 8px; } .track-row { grid-template-columns: minmax(0,1fr) 32px; gap: 3px; } .track-row-main { grid-template-columns: 30px minmax(0,1fr) 48px; gap: 8px; } .plays-col { display: none; } .library-overview-header { align-items: stretch; flex-direction: column; } .library-tools { justify-content: stretch; } .library-search { width: 100%; } .playlist-create { flex: 1; } .playlist-create input { width: 100%; } }
 </style>

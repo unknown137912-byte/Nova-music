@@ -10,7 +10,7 @@
     Settings2, Palette, SlidersHorizontal, Keyboard, Gamepad2, Radio,
     HardDrive, Info, UserRound, X, Globe, History, Monitor, Bell, Power,
     FolderOpen, Download, ShieldCheck, ExternalLink, AudioLines, Database,
-    RefreshCw, CheckCircle2, Loader2,
+    RefreshCw, CheckCircle2, Loader2, Play,
   } from 'lucide-svelte';
 
   export let onClose: () => void = () => {};
@@ -30,10 +30,13 @@
   let downloadQuality = 'high';
   let replayGain = true;
   let gaplessPlayback = true;
+  let autoPlayNext = true;
   let playbackSpeed = 1;
   let volume = 85;
   let cosmicTheme = 'nebula';
   let downloadDirectory = '';
+  let storageInfo: any = null;
+  let optimizingDatabase = false;
   let historyEnabled = true;
   let closeToTray = false;
   let songNotifications = false;
@@ -107,6 +110,7 @@
         downloadQuality = settings.download_quality || settings.quality || 'high';
         replayGain = settings.replay_gain !== 'false';
         gaplessPlayback = settings.gapless !== 'false';
+        autoPlayNext = settings.auto_play_next !== 'false';
         playbackSpeed = Number(settings.playback_speed || 1);
         volume = Number(settings.volume || 85);
         cosmicTheme = settings.cosmic_theme || 'nebula';
@@ -120,6 +124,7 @@
         accountName = account?.name || '';
         accountEmail = account?.email || '';
         applyTheme(cosmicTheme);
+        void refreshStorageInfo();
       } catch (error) {
         console.error('Could not load settings:', error);
       }
@@ -137,6 +142,9 @@
       settings = { ...settings, [key]: String(value) };
       if (key === 'close_to_tray') {
         window.dispatchEvent(new CustomEvent('nova-close-to-background-changed', { detail: String(value) === 'true' }));
+      }
+      if (key === 'auto_play_next') {
+        window.dispatchEvent(new CustomEvent('nova-autoplay-changed', { detail: String(value) === 'true' }));
       }
       authMessage = '';
       return true;
@@ -191,6 +199,33 @@
     } finally {
       isLoading = false;
     }
+  }
+
+  async function refreshStorageInfo() {
+    try { storageInfo = await invoke('get_storage_info'); }
+    catch (_) { storageInfo = null; }
+  }
+
+  async function optimizeDatabase() {
+    try {
+      optimizingDatabase = true;
+      await invoke('optimize_database');
+      authMessage = 'Local database optimized. Your downloads and account are unchanged.';
+      isSuccess = true;
+      await refreshStorageInfo();
+    } catch (error: any) {
+      authMessage = `Could not optimize local data: ${error?.message || error}`;
+      isSuccess = false;
+    } finally {
+      optimizingDatabase = false;
+    }
+  }
+
+  function formatBytes(value: number) {
+    if (!Number.isFinite(value) || value <= 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    const power = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1);
+    return `${(value / Math.pow(1024, power)).toFixed(power === 0 ? 0 : 1)} ${units[power]}`;
   }
 
   async function startGoogleSignIn() {
@@ -402,6 +437,7 @@
         <div class="settings-group-label">PLAYER</div>
         <div class="setting-row"><div class="setting-icon"><SlidersHorizontal size={17} /></div><div class="setting-copy"><strong>Volume normalization</strong><small>Balance volume between tracks when source loudness is available.</small></div><button class="switch" class:enabled={replayGain} role="switch" aria-checked={replayGain} on:click={() => { replayGain = !replayGain; saveSetting('replay_gain', replayGain); }}><span></span></button></div>
         <div class="setting-row"><div class="setting-icon"><AudioLines size={17} /></div><div class="setting-copy"><strong>Gapless playback</strong><small>Reduce silence between consecutive tracks.</small></div><button class="switch" class:enabled={gaplessPlayback} role="switch" aria-checked={gaplessPlayback} on:click={() => { gaplessPlayback = !gaplessPlayback; saveSetting('gapless', gaplessPlayback); }}><span></span></button></div>
+        <div class="setting-row"><div class="setting-icon"><Play size={17} /></div><div class="setting-copy"><strong>Autoplay recommendations</strong><small>Continue with YouTube Music’s up-next picks when your queue is empty.</small></div><button class="switch" class:enabled={autoPlayNext} role="switch" aria-checked={autoPlayNext} on:click={() => { autoPlayNext = !autoPlayNext; saveSetting('auto_play_next', autoPlayNext); }}><span></span></button></div>
         <div class="setting-row"><div class="setting-icon"><SlidersHorizontal size={17} /></div><div class="setting-copy"><strong>Playback speed</strong><small>Set the speed for the current and next tracks.</small></div><select bind:value={playbackSpeed} on:change={() => saveSetting('playback_speed', playbackSpeed)}><option value={0.5}>0.5×</option><option value={0.75}>0.75×</option><option value={1}>Normal</option><option value={1.25}>1.25×</option><option value={1.5}>1.5×</option><option value={1.75}>1.75×</option><option value={2}>2×</option></select></div>
         <div class="setting-row"><div class="setting-icon"><AudioLines size={17} /></div><div class="setting-copy"><strong>Default volume</strong><small>Volume used when NOVA starts.</small></div><div class="setting-range"><input type="range" min="0" max="100" bind:value={volume} on:change={() => saveSetting('volume', volume)} /><span>{volume}%</span></div></div>
       {:else if activeSection === 'Global Hotkeys'}
@@ -421,7 +457,13 @@
         <div class="setting-row"><div class="setting-icon"><Download size={17} /></div><div class="setting-copy"><strong>Download quality</strong><small>Maximum quality used when saving a track.</small></div><select bind:value={downloadQuality} on:change={() => saveSetting('download_quality', downloadQuality)}><option value="high">Highest available</option><option value="medium">Standard</option><option value="low">Data saver</option></select></div>
         <button class="primary-button download-button" on:click={downloadCurrentTrack} disabled={isLoading}><Download size={16} /> {isLoading ? 'Downloading…' : 'Download current track'}</button>
         <div class="settings-group-label storage-label">LOCAL DATA</div>
-        <div class="info-card"><Database size={18} /><p>Account details, preferences and saved library data are stored locally by NOVA. Downloads remain in the folder above.</p></div>
+        <div class="storage-summary">
+          <div><span>Database</span><strong>{formatBytes(storageInfo?.databaseBytes || 0)}</strong></div>
+          <div><span>Playback cache</span><strong>{formatBytes(storageInfo?.playbackCacheBytes || 0)}</strong></div>
+          <div><span>Downloads</span><strong>{formatBytes(storageInfo?.downloadsBytes || 0)}</strong></div>
+        </div>
+        <div class="info-card"><Database size={18} /><p>NOVA keeps playback history and settings in a compact local database. This tool removes expired database cache entries and reclaims unused database space. It never deletes downloaded music.</p></div>
+        <button class="secondary-button optimize-button" on:click={optimizeDatabase} disabled={optimizingDatabase}><RefreshCw size={14} class={optimizingDatabase ? 'spinning' : ''} /> {optimizingDatabase ? 'Optimizing…' : 'Optimize local database'}</button>
       {:else if activeSection === 'About'}
         <div class="about-card"><div class="about-mark">✦</div><h2>NOVA Music</h2><p>A focused desktop player for your YouTube Music library.</p><span class="version-pill">Version {appVersion}</span></div>
         <section class="update-card" aria-label="App updates">
@@ -517,6 +559,11 @@
   .mono-preview i { background: #eee; }
   .setting-range { display: flex; align-items: center; gap: 9px; color: #bec2c2; font-size: 9px; }
   .setting-range input { width: 120px; accent-color: var(--accent, #1ed760); }
+  .storage-summary { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; margin: 11px 0; }
+  .storage-summary > div { min-width: 0; display: flex; flex-direction: column; gap: 6px; padding: 11px 12px; background: #171919; border: 1px solid rgba(255,255,255,.075); border-radius: 8px; }
+  .storage-summary span { color: #929898; font-size: 9px; }
+  .storage-summary strong { overflow: hidden; color: #f0f2f2; font-size: 13px; text-overflow: ellipsis; }
+  .optimize-button { margin: 0 0 12px; }
   .hotkey-row { min-height: 58px; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,.08); }
   .hotkey-row kbd { padding: 5px 8px; color: #d9dddd; background: #282b2b; border: 1px solid rgba(255,255,255,.1); border-radius: 4px; font-size: 9px; }
   .info-card { display: flex; align-items: flex-start; gap: 10px; margin-top: 14px; padding: 12px; color: #9ca1a1; background: #171919; border: 1px solid rgba(255,255,255,.06); border-radius: 7px; }

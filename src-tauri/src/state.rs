@@ -3,6 +3,8 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone)]
 pub struct AppState {
     pub db: Arc<crate::db::Db>,
+    pub app_data_dir: std::path::PathBuf,
+    pub audio_cache_dir: std::path::PathBuf,
     pub innertube: Arc<innertube::InnerTube>,
     pub player: Arc<player::Player>,
     pub orchestrator: Arc<crate::orchestrator::Orchestrator>,
@@ -16,7 +18,14 @@ impl AppState {
         data_dir: &std::path::Path,
     ) -> std::result::Result<Self, Box<dyn std::error::Error>> {
         let db_path = data_dir.join("novamusic.sqlite");
-        let db = Arc::new(crate::db::Db::open(&db_path)?);
+        let (db, quarantined_database) = crate::db::Db::open_or_quarantine(&db_path)?;
+        if let Some(path) = quarantined_database {
+            tracing::error!(
+                backup = %path.display(),
+                "The local database was damaged and has been preserved for recovery"
+            );
+        }
+        let db = Arc::new(db);
 
         let saved_cookie = db.get_setting("session_cookie").await.ok().flatten();
         let saved_oauth_token = db
@@ -86,6 +95,8 @@ impl AppState {
 
         Ok(Self {
             db,
+            app_data_dir: data_dir.to_path_buf(),
+            audio_cache_dir: cache_dir,
             innertube,
             player,
             orchestrator,
