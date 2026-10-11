@@ -4,12 +4,13 @@
   import { writeText } from '@tauri-apps/plugin-clipboard-manager';
   import { listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
+  import { exit } from '@tauri-apps/plugin-process';
   import { fade, fly } from 'svelte/transition';
   import {
     Home as HomeIcon, Search, Library, Settings2, ChevronLeft, ChevronRight,
     RotateCw, UserRound, ListMusic, Mic2, Heart, Play, Pause, SkipBack,
     SkipForward, Volume2, VolumeX, PanelRight, Download, MoreHorizontal,
-    Plus, Music2, Sparkles, X, ListEnd, ChevronDown, Maximize2, Minimize2,
+    Plus, Music2, Sparkles, X, ListEnd, ChevronDown, Maximize2,
   } from 'lucide-svelte';
 
   import Home from './routes/+page.svelte';
@@ -31,7 +32,6 @@
   let librarySidebarOpen = true;
   let settingsOpen = false;
   let showNowPlaying = false;
-  let windowFullscreen = false;
   let sidePanel: SidePanel = null;
   let nowPlaying: any = null;
   let isPlaying = false;
@@ -140,7 +140,10 @@
       if (closeToBackgroundEnabled) {
         event.preventDefault();
         void getCurrentWindow().minimize();
+        return;
       }
+      event.preventDefault();
+      void exit(0);
     }).then((unlisten) => {
       if (disposed) unlisten(); else stopCloseRequest = unlisten;
     });
@@ -332,32 +335,14 @@
     return active;
   }
 
-  async function openImmersivePlayer() {
+  function openImmersivePlayer() {
     if (!nowPlaying) return;
     showNowPlaying = true;
     void loadLyrics();
-    try {
-      await getCurrentWindow().setFullscreen(true);
-      windowFullscreen = true;
-    } catch (_) {
-      // The artwork and lyrics view still fills NOVA's app window if native fullscreen is unavailable.
-    }
   }
 
-  async function toggleWindowFullscreen() {
-    try {
-      windowFullscreen = !windowFullscreen;
-      await getCurrentWindow().setFullscreen(windowFullscreen);
-    } catch (_) {
-      windowFullscreen = false;
-    }
-  }
-
-  async function closeImmersivePlayer() {
+  function closeImmersivePlayer() {
     showNowPlaying = false;
-    if (!windowFullscreen) return;
-    windowFullscreen = false;
-    try { await getCurrentWindow().setFullscreen(false); } catch (_) { /* already windowed */ }
   }
 
   async function seekToLyric(timeMs: number) {
@@ -847,15 +832,13 @@
   </div>
 
   {#if showNowPlaying && nowPlaying}
-    <section class="immersive-player" aria-label="Full screen now playing" in:fade={{ duration: 240 }}>
+    <section class="immersive-player" aria-label="Expanded now playing" in:fade={{ duration: 240 }}>
       <div class="immersive-backdrop" style={`background-image: url("${nowPlaying.thumbnail || ''}")`}></div>
       <div class="immersive-glass-wash"></div>
       <header class="immersive-header">
-        <button class="immersive-close" on:click={closeImmersivePlayer} aria-label="Close full screen player" title="Back to NOVA"><ChevronDown size={21} /></button>
+        <button class="immersive-close" on:click={closeImmersivePlayer} aria-label="Close expanded player" title="Back to NOVA"><ChevronDown size={21} /></button>
         <div class="immersive-header-title"><span>NOW PLAYING</span><strong>NOVA MUSIC</strong></div>
-        <button class="immersive-close" on:click={toggleWindowFullscreen} aria-label={windowFullscreen ? 'Exit native full screen' : 'Enter native full screen'} title={windowFullscreen ? 'Exit full screen' : 'Enter full screen'}>
-          {#if windowFullscreen}<Minimize2 size={18} />{:else}<Maximize2 size={18} />{/if}
-        </button>
+        <span aria-hidden="true"></span>
       </header>
 
       <div class="immersive-content">
@@ -959,7 +942,7 @@
 
     <div class="player-extras">
       <button class="player-small-action" class:selected={sidePanel === 'now-playing'} on:click={() => toggleSidePanel('now-playing')} aria-label="Now playing" title="Now playing"><PanelRight size={17} /></button>
-      <button class="player-small-action" on:click={openImmersivePlayer} aria-label="Open full screen player" title="Full screen player"><Maximize2 size={16} /></button>
+      <button class="player-small-action" on:click={openImmersivePlayer} aria-label="Open expanded player" title="Expanded player"><Maximize2 size={16} /></button>
       <button class="player-small-action" class:selected={sidePanel === 'lyrics'} on:click={() => toggleSidePanel('lyrics')} aria-label="Lyrics" title="Lyrics"><Mic2 size={17} /></button>
       <button class="player-small-action" class:selected={sidePanel === 'queue'} on:click={() => toggleSidePanel('queue')} aria-label="Queue" title="Queue"><ListMusic size={17} /></button>
       <div class="volume-control">
