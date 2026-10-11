@@ -5,10 +5,16 @@ import { fileURLToPath } from 'node:url';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const target = process.env.NOVA_TARGET_TRIPLE || '';
+if (target && target !== 'aarch64-apple-darwin') {
+  throw new Error(`NOVA supports Apple Silicon only; unsupported macOS target: ${target}.`);
+}
+if (!target && process.arch !== 'arm64') {
+  throw new Error(`NOVA supports Apple Silicon only; current architecture is ${process.arch}.`);
+}
 const targetDir = target ? join(root, 'target', target, 'release') : join(root, 'target', 'release');
 const binary = join(targetDir, 'nova-music');
 const brewPrefix = execFileSync('brew', ['--prefix'], { encoding: 'utf8' }).trim();
-const architecture = target.startsWith('x86_64') ? 'intel' : target.startsWith('aarch64') ? 'arm64' : process.arch;
+const architecture = 'arm64';
 const librariesDir = join(root, 'target', 'macos-libraries', architecture);
 const bundleConfig = join(root, 'target', `tauri-bundle-${architecture}.json`);
 

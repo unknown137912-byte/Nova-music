@@ -36,7 +36,7 @@ cd ..
 
 echo ""
 echo "=== Testing Backend Build ==="
-cargo build --release --features tauri --target x86_64-apple-darwin
+cargo build --release --features tauri --target aarch64-apple-darwin
 if [ $? -eq 0 ]; then
     echo "✓ Backend build successful"
 else

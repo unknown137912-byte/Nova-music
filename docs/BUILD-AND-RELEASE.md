@@ -584,7 +584,7 @@ codesign --force --deep --sign - "target/release/bundle/macos/Limusic.app"
 ls -la /dev/tty*
 
 # Try with different display
-cargo tauri build --target x86_64-apple-darwin
+cargo tauri build --target aarch64-apple-darwin
 ```
 
 #### Performance issues

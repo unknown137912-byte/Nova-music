@@ -1,6 +1,6 @@
 # macOS release and updates
 
-NOVA is a Tauri macOS desktop app. A release produces separate `.dmg` installers and signed updater archives for Apple Silicon and Intel Macs, then publishes one `latest.json` with both architectures. The release workflow refuses to publish either DMG if it is 150,000,000 bytes or larger. It also bundles `libmpv` and its Homebrew dylib dependencies into the app so users do not need Homebrew installed.
+NOVA is a Tauri macOS desktop app distributed for Apple Silicon Macs only (arm64). A release produces one `.dmg` installer and a signed updater archive, then publishes `latest.json` with the Apple Silicon update. Intel Macs are unsupported and receive no build or download. The release workflow refuses to publish the DMG if it is 150,000,000 bytes or larger. It also bundles `libmpv` and its Homebrew dylib dependencies into the app so users do not need Homebrew installed.
 
 ## One-time setup
 
@@ -17,7 +17,7 @@ git tag v1.0.1
 git push origin v1.0.1
 ```
 
-GitHub Actions builds native Apple Silicon and Intel apps, adds both DMGs and updater assets to a draft release, checks each DMG size, and publishes the release only if both are under 150 MB. Installed apps can then check GitHub in Settings → About and install the verified update.
+GitHub Actions builds the native Apple Silicon app, adds its DMG and updater assets to a draft release, checks the DMG size, and publishes only if it is under 150 MB. Installed apps can then check GitHub in Settings → About and install the verified update.
 
 ## Build locally
 

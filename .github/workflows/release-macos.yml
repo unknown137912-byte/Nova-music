@@ -19,10 +19,6 @@ jobs:
             target: aarch64-apple-darwin
             dmg_arch: aarch64
             runner: macos-15
-          - arch: intel
-            target: x86_64-apple-darwin
-            dmg_arch: x64
-            runner: macos-15-intel
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -192,8 +188,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[] | select(.name | endswith(".dmg")) | [.name, .size] | @tsv' > dmg-sizes.tsv
-          if [ "$(wc -l < dmg-sizes.tsv | tr -d ' ')" -ne 2 ]; then
-            echo 'Expected one DMG each for Apple Silicon and Intel.' >&2
+          if [ "$(wc -l < dmg-sizes.tsv | tr -d ' ')" -ne 1 ]; then
+            echo 'Expected exactly one Apple Silicon DMG.' >&2
             exit 1
           fi
           max_size=150000000

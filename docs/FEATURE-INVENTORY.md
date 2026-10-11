@@ -95,7 +95,7 @@
 | **Keychain** | Not yet implemented (cookies in SQLite) | **New** | Store cookies/tokens in Keychain |
 | **Notifications** | `notify-rust` - NSUserNotification | **Full reuse** | Track change, import complete |
 | **Signing/Notarization** | Ad-hoc CI, manual notarization for releases | **Document** | Clear instructions for distribution |
-| **Universal Binary** | ARM64 only (macos-14 runner) | **ARM64 first** | M4 optimized, Intel later if needed |
+| **macOS support** | Apple Silicon ARM64 only | **ARM64 only** | Intel Macs are unsupported |
 
 ---
 

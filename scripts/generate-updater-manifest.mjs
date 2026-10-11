@@ -13,7 +13,7 @@ const config = JSON.parse(await readFile('src-tauri/tauri.conf.json', 'utf8'));
 const version = config.version;
 const platforms = {};
 
-for (const [arch, target] of [['arm64', 'darwin-aarch64'], ['intel', 'darwin-x86_64']]) {
+for (const [arch, target] of [['arm64', 'darwin-aarch64']]) {
   const baseName = `NOVA-Music-${version}-macos-${arch}.app.tar.gz`;
   const archive = join(releaseDirectory, baseName);
   const signature = await readFile(`${archive}.sig`, 'utf8');
