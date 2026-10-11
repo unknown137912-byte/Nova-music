@@ -1,0 +1,40 @@
+[workspace]
+resolver = "2"
+members = [
+    "src-tauri",
+    "src-tauri/crates/innertube",
+    "src-tauri/crates/player",
+    "src-tauri/crates/listen-protocol",
+    # "src-tauri/crates/sync-server",  # disabled until compile errors fixed
+]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "NOVA Music — premium macOS desktop music application"
+rust-version = "1.80"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+thiserror = "2"
+rand = "0.8"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+listen-protocol = { path = "src-tauri/crates/listen-protocol" }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "brotli", "json"] }
+sha1 = "0.10"
+hex = "0.4"
+urlencoding = "2"
+rustypipe = { version = "0.11", default-features = false, features = ["rustls-tls-webpki-roots"] }

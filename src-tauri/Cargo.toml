@@ -1,0 +1,85 @@
+[package]
+name = "nova-music"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "NOVA Music — premium macOS desktop music application"
+rust-version = "1.80"
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+thiserror = "2"
+tauri = { version = "2", features = ["tray-icon", "protocol-asset", "macos-private-api", "image-png"] }
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-global-shortcut = "2"
+rusqlite = { version = "0.32", features = ["bundled"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "brotli", "stream", "json"] }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+urlencoding = { workspace = true }
+base64 = "0.22"
+sha2 = "0.10"
+
+innertube = { path = "./crates/innertube" }
+player = { path = "./crates/player" }
+souvlaki = { version = "0.8.3", default-features = false, features = ["use_zbus"] }
+listen-protocol = { path = "./crates/listen-protocol" }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+rand = "0.8"
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+discord-rich-presence = "1.1.0"
+md-5 = "0.10"
+lofty = "0.22.2"
+tauri-plugin-dialog = "2.7.2"
+tauri-plugin-window-state = "2.4.1"
+tauri-plugin-clipboard-manager = "2.3.2"
+lindera = { version = "=0.30.0", default-features = false, features = ["ipadic"] }
+wana_kana = { version = "5", default-features = false }
+pinyin = { version = "0.11", default-features = false, features = ["with_tone"] }
+any_ascii = "0.3"
+notify-rust = "4"
+zip = { version = "4", default-features = false, features = ["deflate-flate2"] }
+csv = "1"
+strsim = "0.11"
+unicode-normalization = "0.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "0.24"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_System_Com",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+ksni = "0.3.6"
+libc = "0.2"
+webkit2gtk = { version = "2.0", features = ["v2_40"] }
+zbus = "5"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

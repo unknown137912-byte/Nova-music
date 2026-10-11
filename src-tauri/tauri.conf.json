@@ -1,0 +1,71 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "NOVA Music",
+  "version": "1.0.0",
+  "identifier": "com.novamusic.desktop",
+  "build": {
+    "frontendDist": "../ui/build",
+    "devUrl": "http://localhost:5183",
+    "beforeDevCommand": "pnpm -C ./ui dev",
+    "beforeBuildCommand": "pnpm -C ./ui build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "NOVA Music",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 620,
+        "resizable": true,
+        "fullscreen": false,
+        "visible": true,
+        "focus": true,
+        "center": true,
+        "decorations": true,
+        "transparent": false,
+        "dragDropEnabled": false
+      }
+    ],
+    "macOSPrivateApi": true,
+    "security": {
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": []
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "category": "Music",
+    "targets": [
+      "dmg"
+    ],
+    "createUpdaterArtifacts": true,
+    "icon": [
+      "icons/icon.png",
+      "icons/32x32.png",
+      "icons/64x64.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "14.0"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/OWNER/NOVA-Music-Rebuild/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEEzQjFGNzYxQzgzQ0ZBMkEKUldRcStqeklZZmV4bzhBOVFGbnBVWGRQUHA4dG9UTDRtc0ZUd3Ewc3pvdU4vbTc0aEViTXJLbloK",
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

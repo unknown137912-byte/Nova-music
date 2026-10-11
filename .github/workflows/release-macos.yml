@@ -1,0 +1,214 @@
+name: macOS release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }} macOS app
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-apple-darwin
+            dmg_arch: aarch64
+            runner: macos-15
+          - arch: intel
+            target: x86_64-apple-darwin
+            dmg_arch: x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install native audio and bundling dependencies
+        run: brew install mpv dylibbundler
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version '^2' --locked
+
+      - name: Install frontend dependencies
+        run: pnpm --dir ui install --frozen-lockfile
+
+      - name: Configure this repository's updater feed
+        run: node scripts/prepare-release-config.mjs
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+
+      - name: Require the updater signing key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo 'Add TAURI_SIGNING_PRIVATE_KEY to this GitHub repository before publishing.' >&2
+            exit 1
+          fi
+
+      - name: Import Apple Developer ID certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo 'Apple Developer ID certificate not configured; this build will be ad-hoc signed.'
+            exit 0
+          fi
+          certificate_path="$RUNNER_TEMP/nova-developer-id.p12"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$certificate_path"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+          security import "$certificate_path" -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          identity=$(security find-identity -v -p codesigning build.keychain | awk -F '"' '/Developer ID Application/ { print $2; exit }')
+          if [ -z "$identity" ]; then
+            echo 'No Developer ID Application identity was found in the imported certificate.' >&2
+            exit 1
+          fi
+          echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
+          rm -f "$certificate_path"
+
+      - name: Prepare App Store Connect notarization key
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
+        run: |
+          if [ -z "$APPLE_API_KEY_CONTENT" ]; then
+            echo 'App Store Connect key not configured; this build will not be notarized.'
+            exit 0
+          fi
+          if [ -z "$APPLE_SIGNING_IDENTITY" ]; then
+            echo 'Notarization requires an Apple Developer ID certificate as well as the App Store Connect key.' >&2
+            exit 1
+          fi
+          key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+          echo "$APPLE_API_KEY_CONTENT" | base64 --decode > "$key_path"
+          echo "APPLE_API_KEY_PATH=$key_path" >> "$GITHUB_ENV"
+
+      - name: Build native app binary
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          export LIBRARY_PATH="$(brew --prefix)/lib:${LIBRARY_PATH:-}"
+          cargo tauri build --no-bundle --target "${{ matrix.target }}"
+
+      - name: Collect and validate Homebrew dylibs
+        run: node scripts/prepare-macos-bundle.mjs
+        env:
+          NOVA_TARGET_TRIPLE: ${{ matrix.target }}
+
+      - name: Bundle and sign app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
+        run: |
+          signing_identity="${APPLE_SIGNING_IDENTITY:--}"
+          APPLE_SIGNING_IDENTITY="$signing_identity" cargo tauri bundle --target "${{ matrix.target }}" --bundles app,dmg --config "target/tauri-bundle-${{ matrix.arch }}.json"
+
+      - name: Verify bundled dependencies and create release assets
+        env:
+          NOVA_RELEASE_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          app='target/${{ matrix.target }}/release/bundle/macos/NOVA Music.app'
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          find "$app" -type f -print0 | while IFS= read -r -d '' file; do
+            if otool -L "$file" 2>/dev/null | grep -E '/(opt/homebrew|usr/local/(Cellar|opt))/' >/dev/null; then
+              echo "Unbundled Homebrew library found in $file" >&2
+              exit 1
+            fi
+          done
+          mkdir -p release-assets
+          cp "target/${{ matrix.target }}/release/bundle/dmg/NOVA Music_${version}_${{ matrix.dmg_arch }}.dmg" "release-assets/NOVA-Music-${version}-macos-${{ matrix.arch }}.dmg"
+          cp "$app.tar.gz" "release-assets/NOVA-Music-${version}-macos-${{ matrix.arch }}.app.tar.gz"
+          cp "$app.tar.gz.sig" "release-assets/NOVA-Music-${version}-macos-${{ matrix.arch }}.app.tar.gz.sig"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    name: Publish checked GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate update manifest
+        run: node scripts/generate-updater-manifest.mjs
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: NOVA Music ${{ github.ref_name }}
+          generate_release_notes: true
+          draft: true
+          files: release-assets/*
+          fail_on_unmatched_files: true
+
+      - name: Enforce the 150 MB download limit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[] | select(.name | endswith(".dmg")) | [.name, .size] | @tsv' > dmg-sizes.tsv
+          if [ "$(wc -l < dmg-sizes.tsv | tr -d ' ')" -ne 2 ]; then
+            echo 'Expected one DMG each for Apple Silicon and Intel.' >&2
+            exit 1
+          fi
+          max_size=150000000
+          while IFS="$(printf '\t')" read -r name size; do
+            if [ "$size" -ge "$max_size" ]; then
+              echo "$name is $size bytes; each DMG must be smaller than $max_size bytes." >&2
+              exit 1
+            fi
+            echo "$name is $size bytes (under 150 MB)."
+          done < dmg-sizes.tsv
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false

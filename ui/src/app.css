@@ -1,0 +1,23 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  font-family: "DM Sans", Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  --nova-accent: #1ed760;
+  --nova-background: #080909;
+  --nova-panel: #111313;
+  --nova-text: #f3f5f4;
+  --nova-muted: #9ba19d;
+  --nova-border: rgba(255, 255, 255, .08);
+}
+
+html, body, #svelte { width: 100%; height: 100%; margin: 0; }
+body { overflow: hidden; background: var(--nova-background); color: var(--nova-text); }
+button, input, select, textarea { font: inherit; }
+button { -webkit-tap-highlight-color: transparent; }
+::selection { color: #071009; background: rgba(30, 215, 96, .7); }

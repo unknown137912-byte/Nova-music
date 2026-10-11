@@ -1,0 +1,24 @@
+[package]
+name = "player"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "libmpv wrapper for audio playback"
+
+[lib]
+name = "player"
+path = "src/lib.rs"
+
+[dependencies]
+tokio = { workspace = true, features = ["sync"] }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+libmpv2 = "4"
+libmpv2-sys = "4"
+libc = "0.2"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
