@@ -115,6 +115,7 @@ jobs:
       - name: Collect and validate Homebrew dylibs
         run: node scripts/prepare-macos-bundle.mjs
         env:
+          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
           NOVA_TARGET_TRIPLE: ${{ matrix.target }}
 
       - name: Bundle and sign app

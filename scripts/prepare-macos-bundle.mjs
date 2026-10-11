@@ -75,6 +75,14 @@ for (const file of machOFiles) {
   }
 }
 
-const config = { bundle: { macOS: { frameworks: libraries } } };
+const hasDeveloperIdentity = Boolean(process.env.APPLE_SIGNING_IDENTITY && process.env.APPLE_SIGNING_IDENTITY !== '-');
+const config = {
+  bundle: {
+    macOS: {
+      frameworks: libraries,
+      hardenedRuntime: hasDeveloperIdentity,
+    },
+  },
+};
 await writeFile(bundleConfig, `${JSON.stringify(config, null, 2)}\n`);
-console.log(`Prepared ${libraries.length} macOS libraries for ${architecture} and wrote ${bundleConfig}.`);
+console.log(`Prepared ${libraries.length} macOS libraries for ${architecture}; hardened runtime ${hasDeveloperIdentity ? 'enabled' : 'disabled'}; wrote ${bundleConfig}.`);
