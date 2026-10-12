@@ -7,10 +7,10 @@
   import { exit } from '@tauri-apps/plugin-process';
   import { fade, fly } from 'svelte/transition';
   import {
-    Home as HomeIcon, Search, Library, Settings2, ChevronLeft, ChevronRight,
+    Home as HomeIcon, Search, Library, Settings2, ChevronRight,
     RotateCw, UserRound, ListMusic, Mic2, Heart, Play, Pause, SkipBack,
     SkipForward, Volume2, VolumeX, PanelRight, Download, MoreHorizontal,
-    Plus, Music2, Sparkles, X, ListEnd, ChevronDown, Maximize2,
+    Plus, Music2, Sparkles, X, ListEnd, ChevronDown, Maximize2, Minimize2,
   } from 'lucide-svelte';
 
   import Home from './routes/+page.svelte';
@@ -22,13 +22,17 @@
   import TrackActions from './lib/TrackActions.svelte';
 
   type Tab = 'home' | 'search' | 'library' | 'playlists' | 'artist';
+  type NavigationEntry = { tab: Tab; playlistId: string | null; artistId: string; query: string };
   type SidePanel = 'now-playing' | 'queue' | 'lyrics' | null;
 
   let activeTab: Tab = 'home';
   let activePlaylistId: string | null = null;
   let activeArtistId = '';
-  let historyStack: Tab[] = ['home'];
+  let historyStack: NavigationEntry[] = [{ tab: 'home', playlistId: null, artistId: '', query: '' }];
   let historyIndex = 0;
+  let headerCompact = false;
+  let lastMainScrollTop = 0;
+  let lastTrackpadNavigationAt = 0;
   let librarySidebarOpen = true;
   let settingsOpen = false;
   let showNowPlaying = false;
@@ -42,6 +46,11 @@
   let isSeeking = false;
   let currentVolume = 85;
   let libraryCollections: Record<string, any[]> = { playlists: [], albums: [], artists: [] };
+  let likedTrackIds = new Set<string>();
+  let downloadJobs: any[] = [];
+  let downloadsOpen = false;
+  let appearanceBackdrop = 'artwork';
+  let motionPreference = 'full';
   let libraryCategory = 'playlists';
   let queueItems: any[] = [];
   let accountName = '';
@@ -138,12 +147,16 @@
     let stopError: (() => void) | undefined;
     let stopEnded: (() => void) | undefined;
     let stopCloseRequest: (() => void) | undefined;
+    let stopDownloadUpdates: (() => void) | undefined;
+    const refreshLikedTracks = () => void loadLikedTracks();
+    window.addEventListener('nova-liked-changed', refreshLikedTracks);
     const openHistory = () => navigate('library');
     const openSettingsFromPage = () => openSettings();
     const refreshAccountLibrary = () => void loadAccountAndLibrary();
     const closeSearchOnOutsideClick = (event: MouseEvent) => {
       const target = event.target as HTMLElement | null;
       if (!target?.closest('.global-search-wrap')) searchPopoverOpen = false;
+      if (!target?.closest('.downloads-wrap')) downloadsOpen = false;
     };
     window.addEventListener('nova-open-history', openHistory);
     window.addEventListener('nova-open-settings', openSettingsFromPage);
@@ -155,8 +168,17 @@
     const handleAutoPlayChange = (event: Event) => {
       autoPlayNext = (event as CustomEvent<boolean>).detail;
     };
+    const applyAppearanceSetting = (event: Event) => {
+      const detail = (event as CustomEvent<{ key: string; value: string }>).detail;
+      if (!detail) return;
+      const shell = document.querySelector<HTMLElement>('.app-shell');
+      if (detail.key === 'accent_color') shell?.style.setProperty('--user-accent', detail.value);
+      if (detail.key === 'appearance_backdrop') appearanceBackdrop = detail.value;
+      if (detail.key === 'motion_preference') motionPreference = detail.value;
+    };
     window.addEventListener('nova-close-to-background-changed', handleCloseSettingChange);
     window.addEventListener('nova-autoplay-changed', handleAutoPlayChange);
+    window.addEventListener('nova-appearance-changed', applyAppearanceSetting);
 
     listen('playback-started', async () => {
       playbackError = null;
@@ -226,7 +248,9 @@
         accountName = account?.name || account?.email || '';
         accountEmail = account?.email || '';
         libraryCollections = {
-          playlists: Array.isArray(library) ? library : (library?.playlists || []),
+          playlists: (Array.isArray(library) ? library : (library?.playlists || []))
+            .filter((item: any) => !['LM', 'VLLM'].includes(String(item?.id || item?.browseId || item?.browse_id || ''))
+              && !/^(liked music|liked songs)$/i.test(String(item?.title || item?.name || ''))),
           albums: library?.albums || [],
           artists: library?.artists || [],
         };
@@ -235,14 +259,24 @@
       }
     };
 
+    const loadLikedTracks = async () => {
+      try {
+        const tracks: any[] = await invoke('get_liked_tracks');
+        if (!disposed) likedTrackIds = new Set((Array.isArray(tracks) ? tracks : []).map((item) => String(item.id || item.videoId || '')).filter(Boolean));
+      } catch (_) { /* Likes remain available in the local database when the account is offline. */ }
+    };
+
     invoke<any>('get_settings').then((settings) => {
       if (!disposed) {
         closeToBackgroundEnabled = settings?.close_to_tray === 'true';
         autoPlayNext = settings?.auto_play_next !== 'false';
         const theme = String(settings?.cosmic_theme || 'nebula');
-        const shell = document.querySelector('.app-shell');
+        const shell = document.querySelector<HTMLElement>('.app-shell');
         shell?.classList.remove('theme-nebula', 'theme-cyber', 'theme-deepspace');
         shell?.classList.add(`theme-${theme}`);
+        shell?.style.setProperty('--user-accent', settings?.accent_color || '');
+        appearanceBackdrop = settings?.appearance_backdrop || 'artwork';
+        motionPreference = settings?.motion_preference || 'full';
       }
     }).catch(() => {});
 
@@ -280,6 +314,11 @@
     };
 
     loadAccountAndLibrary();
+    loadLikedTracks();
+    listen<any>('download-updated', ({ payload }) => {
+      if (!payload?.id) return;
+      downloadJobs = [payload, ...downloadJobs.filter((job) => job.id !== payload.id)].slice(0, 30);
+    }).then((unlisten) => { if (disposed) unlisten(); else stopDownloadUpdates = unlisten; });
     pollPlayback();
     const playbackTimer = setInterval(pollPlayback, 900);
     const accountTimer = setInterval(loadAccountAndLibrary, 45000);
@@ -292,23 +331,34 @@
       stopError?.();
       stopEnded?.();
       stopCloseRequest?.();
+      stopDownloadUpdates?.();
+      window.removeEventListener('nova-liked-changed', refreshLikedTracks);
       window.removeEventListener('nova-open-history', openHistory);
       window.removeEventListener('nova-open-settings', openSettingsFromPage);
       window.removeEventListener('nova-local-playlists-changed', refreshAccountLibrary);
       window.removeEventListener('pointerdown', closeSearchOnOutsideClick);
       window.removeEventListener('nova-close-to-background-changed', handleCloseSettingChange);
       window.removeEventListener('nova-autoplay-changed', handleAutoPlayChange);
+      window.removeEventListener('nova-appearance-changed', applyAppearanceSetting);
       if (globalSearchTimer) clearTimeout(globalSearchTimer);
     };
   });
 
   function navigate(tab: Tab) {
     searchPopoverOpen = false;
-    if (activeTab === tab) {
+    const destination: NavigationEntry = {
+      tab,
+      playlistId: tab === 'playlists' ? activePlaylistId : null,
+      artistId: tab === 'artist' ? activeArtistId : '',
+      query: tab === 'search' ? globalSearchQuery : '',
+    };
+    const current = historyStack[historyIndex];
+    if (current && current.tab === destination.tab && current.playlistId === destination.playlistId
+      && current.artistId === destination.artistId && current.query === destination.query) {
       if (showNowPlaying) void closeImmersivePlayer();
       return;
     }
-    historyStack = [...historyStack.slice(0, historyIndex + 1), tab];
+    historyStack = [...historyStack.slice(0, historyIndex + 1), destination];
     historyIndex = historyStack.length - 1;
     activeTab = tab;
     if (showNowPlaying) void closeImmersivePlayer();
@@ -318,8 +368,32 @@
     const target = historyIndex + direction;
     if (target < 0 || target >= historyStack.length) return;
     historyIndex = target;
-    activeTab = historyStack[historyIndex];
+    const destination = historyStack[historyIndex];
+    activeTab = destination.tab;
+    activePlaylistId = destination.playlistId;
+    activeArtistId = destination.artistId;
+    globalSearchQuery = destination.query;
     if (showNowPlaying) void closeImmersivePlayer();
+  }
+
+  function handleMainScroll(event: Event) {
+    const scrollTop = (event.currentTarget as HTMLElement).scrollTop;
+    const delta = scrollTop - lastMainScrollTop;
+    if (scrollTop <= 16 || delta < -1) headerCompact = false;
+    else if (scrollTop > 26 && delta > 2) headerCompact = true;
+    lastMainScrollTop = scrollTop;
+  }
+
+  function handleTrackpadNavigation(event: WheelEvent) {
+    if (Math.abs(event.deltaX) < 48 || Math.abs(event.deltaX) < Math.abs(event.deltaY) * 1.35) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('.home-chips, .shelf-track, .shelf-scroller, .downloads-list, .global-search-wrap, input, textarea, [contenteditable="true"]')) return;
+    const now = Date.now();
+    if (now - lastTrackpadNavigationAt < 650) return;
+    lastTrackpadNavigationAt = now;
+    event.preventDefault();
+    // A rightward two-finger swipe goes back; a leftward swipe goes forward.
+    navigateHistory(event.deltaX > 0 ? -1 : 1);
   }
 
   function openSettings() {
@@ -360,6 +434,9 @@
     globalSearchLoading = false;
     if (globalSearchTimer) clearTimeout(globalSearchTimer);
     const query = globalSearchQuery.trim();
+    if (activeTab === 'search' && historyStack[historyIndex]?.tab === 'search') {
+      historyStack = historyStack.map((entry, index) => index === historyIndex ? { ...entry, query: globalSearchQuery } : entry);
+    }
     if (query.length < 2) {
       globalSearchRequest += 1;
       globalSearchResults = null;
@@ -551,6 +628,13 @@
     navigate('playlists');
   }
 
+  async function loadLikedTracks() {
+    try {
+      const tracks: any[] = await invoke('get_liked_tracks');
+      likedTrackIds = new Set((Array.isArray(tracks) ? tracks : []).map((item) => String(item.id || item.videoId || '')).filter(Boolean));
+    } catch (_) { /* Keep the last local snapshot if the database is temporarily busy. */ }
+  }
+
   function handleOpenArtist(id: string) {
     if (!id) return;
     activeArtistId = id;
@@ -609,9 +693,12 @@
         showNotice(`Saved to ${path}`);
       } else if (action === 'like') {
         const liked = !trackIsLiked(track);
-        await invoke('rate_track', { trackId, liked });
+        await invoke('rate_track', { trackId, liked, track });
         track.liked = liked;
         track.rating = liked ? 'like' : 'indifferent';
+        if (liked) likedTrackIds = new Set([...likedTrackIds, trackId]);
+        else { const next = new Set(likedTrackIds); next.delete(trackId); likedTrackIds = next; }
+        window.dispatchEvent(new CustomEvent('nova-liked-changed'));
         if (String(nowPlaying?.id || '') === trackId) nowPlaying = { ...nowPlaying, liked, rating: track.rating };
         showNotice(liked ? 'Added to Liked Music' : 'Removed from Liked Music');
         return liked;
@@ -687,7 +774,8 @@
   }
 
   function trackIsLiked(track: any) {
-    return track?.liked === true || String(track?.rating || '').toLowerCase() === 'like';
+    const id = String(track?.videoId || track?.video_id || track?.track_id || track?.id || '');
+    return likedTrackIds.has(id) || track?.liked === true || String(track?.rating || '').toLowerCase() === 'like';
   }
 
   async function toggleLikeTrack() {
@@ -696,7 +784,10 @@
     const wasLiked = trackIsLiked(nowPlaying);
     nowPlaying = { ...nowPlaying, liked: !wasLiked, rating: wasLiked ? 'indifferent' : 'like' };
     try {
-      await invoke('rate_track', { trackId, liked: !wasLiked });
+      await invoke('rate_track', { trackId, liked: !wasLiked, track: nowPlaying });
+      if (wasLiked) { const next = new Set(likedTrackIds); next.delete(trackId); likedTrackIds = next; }
+      else likedTrackIds = new Set([...likedTrackIds, trackId]);
+      window.dispatchEvent(new CustomEvent('nova-liked-changed'));
       showNotice(wasLiked ? 'Removed from Liked Music' : 'Added to Liked Music');
     } catch (error: any) {
       nowPlaying = { ...nowPlaying, liked: wasLiked, rating: wasLiked ? 'like' : 'indifferent' };
@@ -752,16 +843,10 @@
 
 <svelte:window on:keydown={handleHotkey} />
 
-<div class="app-shell theme-nebula" style={`--cover-rgb:${coverRgb};--cover-deep-rgb:${coverDeepRgb}`}>
-  <header class="topbar" data-tauri-drag-region>
+<div class="app-shell theme-nebula" class:reduced-motion={motionPreference === 'reduced'} class:flat-backdrop={appearanceBackdrop === 'flat'} class:gradient-backdrop={appearanceBackdrop === 'gradient'} style={`--cover-rgb:${coverRgb};--cover-deep-rgb:${coverDeepRgb}`}>
+  <header class="topbar" class:compact={headerCompact} data-tauri-drag-region>
     <div class="traffic-light-clearance" data-tauri-drag-region></div>
     <div class="topbar-history">
-      <button class="chrome-button" on:click={() => navigateHistory(-1)} disabled={historyIndex === 0} aria-label="Back">
-        <ChevronLeft size={18} />
-      </button>
-      <button class="chrome-button" on:click={() => navigateHistory(1)} disabled={historyIndex >= historyStack.length - 1} aria-label="Forward">
-        <ChevronRight size={18} />
-      </button>
       <button class="chrome-button refresh-button" on:click={() => window.dispatchEvent(new CustomEvent('nova-refresh-current-view'))} aria-label="Refresh">
         <RotateCw size={16} />
       </button>
@@ -827,17 +912,43 @@
     </div>
 
     <div class="topbar-actions" data-tauri-drag-region>
-      <button class="chrome-button library-toggle" class:selected={librarySidebarOpen} on:click={() => librarySidebarOpen = !librarySidebarOpen} aria-label="Toggle your library">
-        <Library size={18} />
-      </button>
-      <button class="profile-button" on:click={openSettings} aria-label="Account and settings">
-        <span class="profile-avatar">{accountSignedIn ? (accountName.charAt(0).toUpperCase() || 'N') : 'N'}</span>
-        <span class="profile-label">{accountName || 'NOVA Music'}</span>
-        <ChevronDown size={14} />
-      </button>
-      <button class="chrome-button settings-top-button" on:click={openSettings} aria-label="Settings">
-        <Settings2 size={17} />
-      </button>
+      <div class="downloads-wrap">
+        <button class="chrome-button download-top-button" class:active={downloadsOpen} class:downloading={downloadJobs.some((job) => ['starting', 'downloading', 'converting'].includes(job.status))} on:click|stopPropagation={() => downloadsOpen = !downloadsOpen} aria-label="Downloads" aria-expanded={downloadsOpen} title="Downloads">
+          <Download size={17} />
+          {#if downloadJobs.some((job) => ['starting', 'downloading', 'converting'].includes(job.status))}<span class="download-pulse"></span>{/if}
+        </button>
+        {#if downloadsOpen}
+          <section class="downloads-popover" aria-label="Downloads">
+            <header><strong>Downloads</strong><span>{downloadJobs.filter((job) => ['starting', 'downloading', 'converting'].includes(job.status)).length} active</span></header>
+            {#if downloadJobs.length}
+              <div class="downloads-list">
+                {#each downloadJobs as job (job.id)}
+                  <div class="download-job">
+                    <span class="download-job-icon" class:done={job.status === 'completed'} class:failed={job.status === 'failed'}><Download size={15} /></span>
+                    <div class="download-job-copy"><strong>{job.title || 'NOVA Music download'}</strong><small>{job.status === 'completed' ? 'Download complete' : job.status === 'failed' ? (job.error || 'Download failed') : job.status === 'starting' ? 'Finding the best audio stream…' : job.status === 'converting' ? 'Converting audio…' : job.progress == null ? 'Downloading…' : `${Math.round(job.progress)}% · Downloading`}</small>
+                      {#if ['starting', 'downloading', 'converting'].includes(job.status)}<span class="download-progress"><i style={`width:${job.progress == null ? 28 : Math.max(3, job.progress)}%`}></i></span>{/if}
+                    </div>
+                    {#if job.status === 'completed'}<span class="download-check">✓</span>{:else if ['starting', 'downloading', 'converting'].includes(job.status)}<span class="download-spinner"></span>{/if}
+                  </div>
+                {/each}
+              </div>
+            {:else}<p class="downloads-empty">Your downloads will appear here.</p>{/if}
+          </section>
+        {/if}
+      </div>
+      <div class="topbar-user-actions">
+        <button class="chrome-button library-toggle" class:selected={librarySidebarOpen} on:click={() => librarySidebarOpen = !librarySidebarOpen} aria-label="Toggle your library">
+          <Library size={18} />
+        </button>
+        <button class="profile-button" on:click={openSettings} aria-label="Account and settings">
+          <span class="profile-avatar">{accountSignedIn ? (accountName.charAt(0).toUpperCase() || 'N') : 'N'}</span>
+          <span class="profile-label">{accountName || 'NOVA Music'}</span>
+          <ChevronDown size={14} />
+        </button>
+        <button class="chrome-button settings-top-button" on:click={openSettings} aria-label="Settings">
+          <Settings2 size={17} />
+        </button>
+      </div>
     </div>
   </header>
 
@@ -912,7 +1023,7 @@
       </aside>
     {/if}
 
-    <main class="main-content" class:panel-open={sidePanel !== null}>
+    <main class="main-content" class:panel-open={sidePanel !== null} on:scroll={handleMainScroll} on:wheel|nonpassive={handleTrackpadNavigation}>
       {#key `${activeTab}:${activePlaylistId || ''}:${activeArtistId}:${activeTab === 'search' ? globalSearchQuery : ''}`}
       <div class="route-layer" in:fly={{ y: 8, duration: 230 }} out:fade={{ duration: 115 }}>
       {#if activeTab === 'home'}
@@ -1032,7 +1143,7 @@
       <header class="immersive-header">
         <button class="immersive-close" on:click={closeImmersivePlayer} aria-label="Close expanded player" title="Back to NOVA"><ChevronDown size={21} /></button>
         <div class="immersive-header-title"><span>NOW PLAYING</span><strong>NOVA MUSIC</strong></div>
-        <span aria-hidden="true"></span>
+        <button class="immersive-close fullscreen-exit" on:click={closeImmersivePlayer} aria-label="Exit full-screen player" title="Exit full-screen player"><Minimize2 size={17} /><span>Exit full screen</span></button>
       </header>
 
       <div class="immersive-content">
@@ -1175,7 +1286,7 @@
   :global(button), :global(input), :global(select), :global(textarea) { font: inherit; }
 
   .app-shell {
-    --accent: rgb(var(--cover-rgb));
+    --accent: var(--user-accent, rgb(var(--cover-rgb)));
     --accent-soft: rgba(var(--cover-rgb), .16);
     --glass-fill: rgba(26, 29, 29, .76);
     --glass-edge: rgba(255, 255, 255, .11);
@@ -1192,7 +1303,10 @@
     color: #f6f6f6;
     background: radial-gradient(ellipse at 30% -15%, rgba(var(--cover-rgb), .16), transparent 45%), radial-gradient(ellipse at 90% 105%, rgba(var(--cover-deep-rgb), .38), transparent 48%), #080909;
   }
-  :global(.app-shell.theme-cyber), :global(.app-shell.theme-deepspace) { --accent: rgb(var(--cover-rgb)); --accent-soft: rgba(var(--cover-rgb), .16); }
+  :global(.app-shell.theme-cyber), :global(.app-shell.theme-deepspace) { --accent: var(--user-accent, rgb(var(--cover-rgb))); --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent); }
+  :global(.app-shell.flat-backdrop) { background: #080909; }
+  :global(.app-shell.gradient-backdrop) { background: radial-gradient(ellipse at 12% 0%, rgba(93,92,190,.22), transparent 45%), radial-gradient(ellipse at 100% 100%, rgba(20,143,146,.18), transparent 42%), #080909; }
+  :global(.app-shell.reduced-motion *), :global(.app-shell.reduced-motion *::before), :global(.app-shell.reduced-motion *::after) { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 
   .topbar {
     position: relative;
@@ -1204,13 +1318,13 @@
     gap: 22px;
     padding: 0 18px 0 9px;
     background: linear-gradient(110deg, rgba(34, 38, 37, .78), rgba(11, 12, 12, .82) 42%, rgba(17, 19, 19, .74));
-    border-bottom: 1px solid var(--glass-edge);
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.09), 0 12px 28px rgba(0,0,0,.13);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.09), 0 8px 24px rgba(0,0,0,.1);
     -webkit-backdrop-filter: blur(26px) saturate(1.3);
     backdrop-filter: blur(26px) saturate(1.3);
   }
   .traffic-light-clearance { width: 66px; height: 100%; flex: 0 0 66px; }
-  .topbar-history, .topbar-actions { display: flex; align-items: center; gap: 8px; }
+  .topbar-history, .topbar-actions, .topbar-user-actions { display: flex; align-items: center; gap: 8px; }
+  .topbar-history { flex: 0 0 auto; }
   .chrome-button, .icon-button, .player-small-action, .transport-button {
     display: inline-flex;
     align-items: center;
@@ -1225,8 +1339,33 @@
   .chrome-button { width: 32px; height: 32px; }
   .chrome-button:hover, .icon-button:hover, .player-small-action:hover, .transport-button:hover { color: #fff; background: rgba(255,255,255,.09); }
   .chrome-button:disabled { opacity: .35; cursor: default; }
+  .downloads-wrap { position: relative; display: inline-flex; }
+  .download-top-button { position: relative; }
+  .download-top-button.active, .download-top-button.downloading { color: var(--accent); }
+  .download-pulse { position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; background: var(--accent); border: 1px solid #151616; border-radius: 50%; animation: download-pulse 1.25s ease-in-out infinite; }
+  @keyframes download-pulse { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 20%, transparent); transform: scale(.82); } }
+  .downloads-popover { position: absolute; z-index: 40; top: calc(100% + 12px); right: -95px; width: min(360px, calc(100vw - 30px)); max-height: min(460px, calc(100vh - 95px)); overflow: hidden; color: #f5f6f6; background: rgba(23,25,26,.97); border: 1px solid rgba(255,255,255,.11); border-radius: 14px; box-shadow: 0 22px 60px #0009; backdrop-filter: blur(28px) saturate(1.35); animation: download-panel-in .18s ease-out both; }
+  .downloads-popover > header { height: 48px; display: flex; align-items: center; justify-content: space-between; padding: 0 15px; border-bottom: 1px solid rgba(255,255,255,.08); }
+  .downloads-popover > header strong { font-size: 13px; }
+  .downloads-popover > header span { color: #9da3a3; font-size: 10px; }
+  .downloads-list { max-height: min(410px, calc(100vh - 145px)); overflow: auto; padding: 5px; }
+  .download-job { min-height: 63px; display: flex; align-items: center; gap: 11px; padding: 9px; border-radius: 9px; }
+  .download-job:hover { background: rgba(255,255,255,.05); }
+  .download-job-icon { width: 34px; height: 34px; flex: 0 0 34px; display: grid; place-items: center; color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: 9px; }
+  .download-job-icon.done { color: #70d8a2; background: rgba(112,216,162,.13); }
+  .download-job-icon.failed { color: #ff8585; background: rgba(255,100,100,.13); }
+  .download-job-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 5px; }
+  .download-job-copy strong { overflow: hidden; font-size: 11px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+  .download-job-copy small { overflow: hidden; color: #a1a7a7; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+  .download-progress { height: 3px; overflow: hidden; background: #3a3e3e; border-radius: 4px; }
+  .download-progress i { height: 100%; display: block; background: var(--accent); border-radius: inherit; transition: width .22s ease; }
+  .download-spinner { width: 14px; height: 14px; flex: 0 0 14px; border: 2px solid #555; border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
+  .download-check { color: #70d8a2; font-size: 16px; }
+  .downloads-empty { margin: 0; padding: 28px 16px; color: #969d9d; text-align: center; font-size: 11px; }
+  @keyframes download-panel-in { from { opacity: 0; transform: translateY(-5px) scale(.985); } to { opacity: 1; transform: none; } }
   .refresh-button { margin-left: 5px; }
-  .global-search-wrap { position: relative; width: min(460px, 42vw); margin: 0 auto; }
+  .global-search-wrap { position: relative; width: min(460px, 42vw); margin: 0 auto; transition: width .38s cubic-bezier(.2,.8,.2,1), transform .38s cubic-bezier(.2,.8,.2,1); }
+  .topbar.compact .global-search-wrap { width: min(320px, 30vw); }
   .global-search {
     height: 38px;
     width: 100%;
@@ -1241,8 +1380,9 @@
     box-shadow: inset 0 1px 0 rgba(255,255,255,.1), inset 0 0 0 1px rgba(255,255,255,.025);
     -webkit-backdrop-filter: blur(18px) saturate(1.25);
     backdrop-filter: blur(18px) saturate(1.25);
-    transition: border-color .16s ease, background .16s ease, box-shadow .16s ease;
+    transition: border-color .16s ease, background .16s ease, box-shadow .16s ease, height .32s cubic-bezier(.2,.8,.2,1), padding .32s cubic-bezier(.2,.8,.2,1);
   }
+  .topbar.compact .global-search { height: 34px; padding-inline: 11px; }
   .global-search:hover, .global-search.focused { background: #202222; border-color: rgba(255,255,255,.2); box-shadow: 0 0 0 3px rgba(var(--cover-rgb),.08), inset 0 1px 0 rgba(255,255,255,.1); }
   .global-search input { min-width: 0; flex: 1; color: #f0f2f2; background: transparent; border: 0; outline: 0; font-size: 13px; }
   .global-search input::placeholder { color: #bfc1c1; opacity: 1; }
@@ -1271,7 +1411,11 @@
   @keyframes search-spin { to { transform: rotate(360deg); } }
   .search-view-all { width: 100%; min-height: 38px; display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 5px; color: #e6e8e8; background: #1b1e1e; border: 1px solid rgba(255,255,255,.07); border-radius: 9px; font-size: 11px; font-weight: 650; cursor: pointer; }
   .search-view-all:hover { background: #252929; }
-  .topbar-actions { min-width: 225px; justify-content: flex-end; }
+  .topbar-actions { width: auto; max-width: 390px; min-width: 225px; flex: 0 1 auto; justify-content: flex-end; overflow: hidden; }
+  .downloads-wrap { flex: 0 0 auto; }
+  .topbar-user-actions { max-width: 350px; min-width: 185px; flex: 0 1 auto; justify-content: flex-end; overflow: hidden; opacity: 1; transform: translateY(0) scale(1); transform-origin: right center; transition: max-width .38s cubic-bezier(.2,.8,.2,1), min-width .38s cubic-bezier(.2,.8,.2,1), opacity .24s ease, transform .38s cubic-bezier(.2,.8,.2,1), gap .38s ease, visibility 0s linear; }
+  .topbar.compact .topbar-actions { max-width: 48px; min-width: 40px; }
+  .topbar.compact .topbar-user-actions { max-width: 0; min-width: 0; gap: 0; opacity: 0; transform: translateY(-8px) scale(.94); pointer-events: none; visibility: hidden; transition: max-width .38s cubic-bezier(.2,.8,.2,1), min-width .38s cubic-bezier(.2,.8,.2,1), opacity .22s ease, transform .38s cubic-bezier(.2,.8,.2,1), gap .38s ease, visibility 0s linear .38s; }
   .library-toggle.selected { color: var(--accent); }
   .profile-button {
     max-width: 220px;
@@ -1441,6 +1585,8 @@
   .immersive-header { height: 68px; flex: 0 0 68px; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 4px clamp(18px, 3vw, 48px) 0; }
   .immersive-close { width: 40px; height: 40px; display: grid; place-items: center; justify-self: start; color: rgba(255,255,255,.78); background: rgba(255,255,255,.075); border: 1px solid rgba(255,255,255,.1); border-radius: 50%; cursor: pointer; backdrop-filter: blur(18px); transition: background .18s ease, transform .18s ease; }
   .immersive-close:last-child { justify-self: end; }
+  .immersive-close.fullscreen-exit { width: auto; min-width: 40px; gap: 8px; padding: 0 13px; border-radius: 22px; }
+  .fullscreen-exit span { font-size: 10px; white-space: nowrap; }
   .immersive-close:hover { color: #fff; background: rgba(255,255,255,.16); transform: translateY(-1px); }
   .immersive-header-title { display: flex; flex-direction: column; align-items: center; gap: 4px; }
   .immersive-header-title span, .immersive-label { color: rgba(237,231,234,.6); font-size: 9px; font-weight: 800; letter-spacing: .18em; }
@@ -1528,10 +1674,11 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   .player-progress { width: 100%; display: flex; align-items: center; gap: 8px; color: #969a9a; font-size: 9px; font-variant-numeric: tabular-nums; }
   .player-progress span { width: 31px; text-align: center; }
-  .player-progress input, .volume-control input { height: 4px; appearance: none; -webkit-appearance: none; border: 0; border-radius: 6px; outline: none; cursor: pointer; background: linear-gradient(to right, #f2f4f4 var(--progress), #444848 var(--progress)); }
+  .player-progress input, .volume-control input { height: 4px; appearance: none; -webkit-appearance: none; border: 0; border-radius: 6px; outline: none; cursor: pointer; background: linear-gradient(to right, #f2f4f4 var(--progress), #444848 var(--progress)); transition: height .18s ease, filter .18s ease; }
+  .player-progress input:hover { height: 6px; filter: drop-shadow(0 0 5px rgba(255,255,255,.16)); }
   .player-progress input { min-width: 0; flex: 1; }
-  .player-progress input::-webkit-slider-thumb, .volume-control input::-webkit-slider-thumb { width: 10px; height: 10px; appearance: none; -webkit-appearance: none; background: #f7f8f8; border: 0; border-radius: 50%; opacity: 0; transition: opacity .12s; }
-  .player-progress input:hover::-webkit-slider-thumb, .volume-control input:hover::-webkit-slider-thumb { opacity: 1; }
+  .player-progress input::-webkit-slider-thumb, .volume-control input::-webkit-slider-thumb { width: 0; height: 0; appearance: none; -webkit-appearance: none; background: #f7f8f8; border: 0; border-radius: 50%; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); transition: width .18s cubic-bezier(.2,.8,.2,1), height .18s cubic-bezier(.2,.8,.2,1), opacity .16s ease; opacity: 0; }
+  .player-progress input:hover::-webkit-slider-thumb, .player-progress input:focus-visible::-webkit-slider-thumb, .volume-control input:hover::-webkit-slider-thumb { width: 11px; height: 11px; opacity: 1; }
   .player-extras { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
   .volume-control { display: flex; align-items: center; gap: 5px; }
   .volume-control input { width: 84px; }
@@ -1552,6 +1699,7 @@
     .right-panel { width: 290px; flex-basis: 290px; }
     .profile-label { display: none; }
     .topbar-actions { min-width: 100px; }
+    .topbar-user-actions { min-width: 100px; }
     .player-bar { grid-template-columns: minmax(145px,1fr) minmax(260px,1.25fr) minmax(110px,1fr); padding-inline: 10px; }
     .player-extras { gap: 3px; }
     .volume-control input { display: none; }

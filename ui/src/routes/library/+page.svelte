@@ -113,7 +113,7 @@ $: savedCollectionCount = libraryData.length + albumData.length + artistData.len
   {:else}
     <!-- Quick Tiles -->
     <div class="quick-tiles">
-      <button type="button" class="tile liked-tile" on:click={() => onOpenPlaylist('VLLM')}>
+      <button type="button" class="tile liked-tile" on:click={() => onOpenPlaylist('NOVA_LIKED')}>
         <div class="tile-icon">❤️</div>
         <div class="tile-content">
           <h3>Liked Songs</h3>

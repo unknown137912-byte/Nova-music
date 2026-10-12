@@ -1,5 +1,5 @@
 use crate::state::AppState;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::io::AsyncWriteExt;
 
 fn metadata_client() -> Result<innertube::clients::YouTubeClient, String> {
@@ -29,6 +29,21 @@ pub async fn get_home(
             Err(e.to_string())
         }
     }
+}
+
+#[tauri::command]
+pub async fn get_home_continuation(
+    continuation: String,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let _ = crate::auth::ensure_access_token(&state).await;
+    let client = metadata_client()?;
+    let page = state
+        .innertube
+        .home_continuation(&client, &continuation)
+        .await
+        .map_err(|error| format!("Could not load more recommendations: {error}"))?;
+    serde_json::to_value(page).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -105,6 +120,11 @@ pub async fn get_library(state: State<'_, AppState>) -> Result<serde_json::Value
         .get_local_playlists()
         .await
         .map_err(|error| error.to_string())?;
+    let liked_songs = state
+        .db
+        .get_liked_tracks()
+        .await
+        .map_err(|error| error.to_string())?;
     let client = metadata_client()?;
     if state.innertube.is_logged_in() {
         let (playlists, albums, artists) = tokio::join!(
@@ -130,7 +150,7 @@ pub async fn get_library(state: State<'_, AppState>) -> Result<serde_json::Value
                 "playlists": playlists,
                 "albums": albums.unwrap_or_default(),
                 "artists": artists.unwrap_or_default(),
-                "songs": [],
+                "songs": liked_songs,
             }));
         }
     }
@@ -138,7 +158,7 @@ pub async fn get_library(state: State<'_, AppState>) -> Result<serde_json::Value
         let mut playlists = crate::auth::youtube_data_playlists(&token).await?;
         playlists.extend(local_playlists);
         return Ok(
-            serde_json::json!({"playlists": playlists, "songs": [], "albums": [], "artists": []}),
+            serde_json::json!({"playlists": playlists, "songs": liked_songs, "albums": [], "artists": []}),
         );
     }
     match state.db.get_library().await {
@@ -149,6 +169,7 @@ pub async fn get_library(state: State<'_, AppState>) -> Result<serde_json::Value
             {
                 playlists.extend(local_playlists);
             }
+            library["songs"] = serde_json::Value::Array(liked_songs);
             Ok(library)
         }
         Err(e) => Err(e.to_string()),
@@ -306,6 +327,17 @@ pub async fn get_history(state: State<'_, AppState>) -> Result<serde_json::Value
         .await
         .map(|history| serde_json::json!(history))
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_liked_tracks(
+    state: State<'_, AppState>,
+) -> Result<Vec<serde_json::Value>, String> {
+    state
+        .db
+        .get_liked_tracks()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -632,7 +664,10 @@ pub async fn play_track(
 }
 
 #[tauri::command]
-pub async fn download_current_track(state: State<'_, AppState>) -> Result<String, String> {
+pub async fn download_current_track(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
     let track = state
         .current_track
         .lock()
@@ -643,11 +678,12 @@ pub async fn download_current_track(state: State<'_, AppState>) -> Result<String
         .as_str()
         .ok_or("The current song has no track ID.")?;
     let title = track["title"].as_str().unwrap_or("NOVA Music download");
-    download_audio(&state, track_id, title).await
+    download_audio(&state, &app, track_id, title).await
 }
 
 #[tauri::command]
 pub async fn download_track(
+    app: AppHandle,
     track_id: String,
     title: String,
     state: State<'_, AppState>,
@@ -655,10 +691,82 @@ pub async fn download_track(
     if track_id.trim().is_empty() {
         return Err("This song has no YouTube track ID, so NOVA cannot download it.".into());
     }
-    download_audio(&state, &track_id, &title).await
+    download_audio(&state, &app, &track_id, &title).await
 }
 
-async fn download_audio(state: &AppState, track_id: &str, title: &str) -> Result<String, String> {
+fn emit_download_update(
+    app: &AppHandle,
+    id: &str,
+    track_id: &str,
+    title: &str,
+    status: &str,
+    progress: Option<f64>,
+    bytes_downloaded: u64,
+    total_bytes: Option<u64>,
+    path: Option<&str>,
+    error: Option<&str>,
+) {
+    let _ = app.emit(
+        "download-updated",
+        serde_json::json!({
+            "id": id, "trackId": track_id, "title": title, "status": status,
+            "progress": progress, "bytesDownloaded": bytes_downloaded,
+            "totalBytes": total_bytes, "path": path, "error": error,
+        }),
+    );
+}
+
+async fn download_audio(
+    state: &AppState,
+    app: &AppHandle,
+    track_id: &str,
+    title: &str,
+) -> Result<String, String> {
+    let id = format!(
+        "{}-{}",
+        chrono::Utc::now().timestamp_millis(),
+        rand::random::<u32>()
+    );
+    emit_download_update(
+        app, &id, track_id, title, "starting", None, 0, None, None, None,
+    );
+    let result = download_audio_inner(state, app, &id, track_id, title).await;
+    match &result {
+        Ok(path) => emit_download_update(
+            app,
+            &id,
+            track_id,
+            title,
+            "completed",
+            Some(100.0),
+            0,
+            None,
+            Some(path),
+            None,
+        ),
+        Err(error) => emit_download_update(
+            app,
+            &id,
+            track_id,
+            title,
+            "failed",
+            None,
+            0,
+            None,
+            None,
+            Some(error),
+        ),
+    }
+    result
+}
+
+async fn download_audio_inner(
+    state: &AppState,
+    app: &AppHandle,
+    job_id: &str,
+    track_id: &str,
+    title: &str,
+) -> Result<String, String> {
     let quality = audio_quality(
         state
             .db
@@ -669,6 +777,13 @@ async fn download_audio(state: &AppState, track_id: &str, title: &str) -> Result
             .or(state.db.get_setting("quality").await.ok().flatten()),
     );
     let resolved = resolve_audio(state, track_id, quality).await?;
+    let format = state
+        .db
+        .get_setting("download_format")
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "original".into());
 
     let directory = state
         .db
@@ -702,13 +817,14 @@ async fn download_audio(state: &AppState, track_id: &str, title: &str) -> Result
         .map_err(|e| format!("Download request failed: {e}"))?
         .error_for_status()
         .map_err(|e| format!("The audio server refused the download: {e}"))?;
+    let total_bytes = response.content_length();
     let content_type = response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_ascii_lowercase();
-    let extension = if content_type.contains("mp4") {
+    let source_extension = if content_type.contains("mp4") {
         "m4a"
     } else if content_type.contains("mpeg") || content_type.contains("mp3") {
         "mp3"
@@ -718,6 +834,7 @@ async fn download_audio(state: &AppState, track_id: &str, title: &str) -> Result
 
     let safe_title: String = title
         .chars()
+        .take(150)
         .map(|c| {
             if c.is_control() || "/\\:*?\"<>|".contains(c) {
                 '_'
@@ -732,6 +849,12 @@ async fn download_audio(state: &AppState, track_id: &str, title: &str) -> Result
     } else {
         safe_title
     };
+    let extension = match format.as_str() {
+        "mp3" => "mp3",
+        "opus" => "opus",
+        "flac" => "flac",
+        _ => source_extension,
+    };
     let mut index = 1;
     let destination = loop {
         let suffix = if index == 1 {
@@ -745,26 +868,135 @@ async fn download_audio(state: &AppState, track_id: &str, title: &str) -> Result
         }
         index += 1;
     };
-    let partial = destination.with_extension(format!("{extension}.part"));
+    let partial = directory.join(format!(
+        ".{safe_title}.{}.{}.part",
+        job_id, source_extension
+    ));
     let mut file = tokio::fs::File::create(&partial)
         .await
         .map_err(|e| format!("Could not create download file: {e}"))?;
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|e| format!("Audio download stopped: {e}"))?
-    {
-        file.write_all(&chunk)
-            .await
-            .map_err(|e| format!("Could not write audio download: {e}"))?;
+    let mut bytes_downloaded = 0u64;
+    let mut last_progress_update = std::time::Instant::now();
+    loop {
+        let chunk = match response.chunk().await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(error) => {
+                drop(file);
+                let _ = tokio::fs::remove_file(&partial).await;
+                return Err(format!("Audio download stopped: {error}"));
+            }
+        };
+        if let Err(error) = file.write_all(&chunk).await {
+            drop(file);
+            let _ = tokio::fs::remove_file(&partial).await;
+            return Err(format!("Could not write audio download: {error}"));
+        }
+        bytes_downloaded += chunk.len() as u64;
+        let progress = total_bytes
+            .map(|total| (bytes_downloaded as f64 / total.max(1) as f64 * 100.0).min(99.0));
+        if last_progress_update.elapsed() >= std::time::Duration::from_millis(250)
+            || progress.is_some_and(|value| value >= 99.0)
+        {
+            emit_download_update(
+                app,
+                job_id,
+                track_id,
+                title,
+                "downloading",
+                progress,
+                bytes_downloaded,
+                total_bytes,
+                None,
+                None,
+            );
+            last_progress_update = std::time::Instant::now();
+        }
     }
-    file.flush()
-        .await
-        .map_err(|e| format!("Could not finish audio download: {e}"))?;
+    if let Err(error) = file.flush().await {
+        drop(file);
+        let _ = tokio::fs::remove_file(&partial).await;
+        return Err(format!("Could not finish audio download: {error}"));
+    }
     drop(file);
-    tokio::fs::rename(&partial, &destination)
-        .await
-        .map_err(|e| format!("Could not finish the downloaded file: {e}"))?;
+    if format == "original" || !matches!(format.as_str(), "mp3" | "opus" | "flac") {
+        if let Err(error) = tokio::fs::rename(&partial, &destination).await {
+            let _ = tokio::fs::remove_file(&partial).await;
+            return Err(format!("Could not finish the downloaded file: {error}"));
+        }
+    } else {
+        emit_download_update(
+            app,
+            job_id,
+            track_id,
+            title,
+            "converting",
+            None,
+            bytes_downloaded,
+            total_bytes,
+            None,
+            None,
+        );
+        let converted = directory.join(format!(".{safe_title}.{}.converted.{extension}", job_id));
+        let ffmpeg = app
+            .path()
+            .resolve("ffmpeg", tauri::path::BaseDirectory::Resource)
+            .ok()
+            .filter(|path| path.is_file())
+            .or_else(|| {
+                ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]
+                    .into_iter()
+                    .map(std::path::PathBuf::from)
+                    .find(|path| path.is_file())
+            });
+        let mut command = tokio::process::Command::new(
+            ffmpeg.unwrap_or_else(|| std::path::PathBuf::from("ffmpeg")),
+        );
+        command
+            .arg("-hide_banner")
+            .arg("-loglevel")
+            .arg("error")
+            .arg("-y")
+            .arg("-i")
+            .arg(&partial)
+            .arg("-vn");
+        match format.as_str() {
+            "mp3" => {
+                command.args(["-c:a", "libmp3lame", "-q:a", "2"]);
+            }
+            "opus" => {
+                command.args(["-c:a", "libopus", "-b:a", "160k"]);
+            }
+            "flac" => {
+                command.args(["-c:a", "flac"]);
+            }
+            _ => {}
+        }
+        command.arg(&converted);
+        let status = match command.status().await {
+            Ok(status) => status,
+            Err(error) => {
+                let _ = tokio::fs::remove_file(&partial).await;
+                let _ = tokio::fs::remove_file(&converted).await;
+                return Err(format!(
+                    "Audio conversion needs FFmpeg installed and available on PATH: {error}"
+                ));
+            }
+        };
+        if !status.success() {
+            let _ = tokio::fs::remove_file(&converted).await;
+            let _ = tokio::fs::remove_file(&partial).await;
+            return Err(
+                "FFmpeg could not convert this audio stream to the selected format.".into(),
+            );
+        }
+        if let Err(error) = tokio::fs::rename(&converted, &destination).await {
+            let _ = tokio::fs::remove_file(&partial).await;
+            let _ = tokio::fs::remove_file(&converted).await;
+            return Err(format!("Could not save converted audio: {error}"));
+        }
+        let _ = tokio::fs::remove_file(&partial).await;
+    }
     Ok(destination.to_string_lossy().into_owned())
 }
 
@@ -951,23 +1183,62 @@ pub async fn set_volume(volume: i64, state: State<'_, AppState>) -> Result<(), S
 pub async fn rate_track(
     track_id: String,
     liked: bool,
+    track: Option<serde_json::Value>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let _ = crate::auth::ensure_access_token(&state).await;
-    if !state.innertube.is_logged_in() {
-        return Err("Sign in to your YouTube Music account to save liked songs.".into());
-    }
-    let client = metadata_client()?;
-    let rating = if liked {
-        innertube::Rating::Like
-    } else {
-        innertube::Rating::Indifferent
-    };
+    let track = track
+        .filter(serde_json::Value::is_object)
+        .or_else(|| {
+            state
+                .current_track
+                .lock()
+                .ok()
+                .and_then(|current| current.clone())
+                .filter(|current| {
+                    current.get("id").and_then(serde_json::Value::as_str) == Some(track_id.as_str())
+                })
+        })
+        .unwrap_or_else(|| serde_json::json!({}));
+    let title = track
+        .get("title")
+        .or_else(|| track.get("name"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("Unknown track");
+    let artist = track
+        .get("artist")
+        .or_else(|| track.get("artists"))
+        .or_else(|| track.get("subtitle"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("YouTube Music");
+    let album = track
+        .get("album")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let thumbnail = track
+        .get("thumbnail")
+        .or_else(|| track.get("thumbnail_url"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let duration = track
+        .get("duration_seconds")
+        .or_else(|| track.get("duration"))
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0);
+    let artist_id = track
+        .get("artistId")
+        .or_else(|| track.get("artist_id"))
+        .and_then(serde_json::Value::as_str);
+    let album_id = track
+        .get("albumId")
+        .or_else(|| track.get("album_id"))
+        .and_then(serde_json::Value::as_str);
     state
-        .innertube
-        .rate(&client, &track_id, rating)
+        .db
+        .set_liked_track(
+            &track_id, title, artist, album, thumbnail, duration, artist_id, album_id, liked,
+        )
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| error.to_string())?;
     if let Some(track) = state.current_track.lock().unwrap().as_mut() {
         if track.get("id").and_then(serde_json::Value::as_str) == Some(track_id.as_str()) {
             track["liked"] = serde_json::Value::Bool(liked);
@@ -975,6 +1246,32 @@ pub async fn rate_track(
                 serde_json::Value::String(if liked { "like" } else { "indifferent" }.into());
         }
     }
+
+    // The local library is authoritative for the UI. Sync to YouTube in the background so a
+    // slow or rejected Innertube request cannot make the like button appear to hang or lose data.
+    let sync_state = state.inner().clone();
+    let sync_track_id = track_id.clone();
+    tauri::async_runtime::spawn(async move {
+        let _ = crate::auth::ensure_access_token(&sync_state).await;
+        if !sync_state.innertube.is_logged_in() {
+            return;
+        }
+        let Ok(client) = metadata_client() else {
+            return;
+        };
+        let rating = if liked {
+            innertube::Rating::Like
+        } else {
+            innertube::Rating::Indifferent
+        };
+        if let Err(error) = sync_state
+            .innertube
+            .rate(&client, &sync_track_id, rating)
+            .await
+        {
+            tracing::warn!(track_id = %sync_track_id, error = %error, "Could not sync local like to YouTube Music");
+        }
+    });
     Ok(())
 }
 
@@ -1300,6 +1597,24 @@ pub async fn update_settings(
         {
             return Err("Choose high, medium, low, or auto audio quality.".into());
         }
+        "download_format" if !matches!(value.as_str(), "original" | "mp3" | "opus" | "flac") => {
+            return Err("Choose original, MP3, Opus, or FLAC download format.".into());
+        }
+        "appearance_backdrop" if !matches!(value.as_str(), "artwork" | "gradient" | "flat") => {
+            return Err("Choose artwork, gradient, or minimal dark background.".into());
+        }
+        "motion_preference" if !matches!(value.as_str(), "full" | "reduced") => {
+            return Err("Choose full or reduced motion.".into());
+        }
+        "accent_color"
+            if value.len() != 7
+                || !value.starts_with('#')
+                || !value[1..]
+                    .chars()
+                    .all(|character| character.is_ascii_hexdigit()) =>
+        {
+            return Err("Accent color must be a six-digit hex color.".into());
+        }
         "replay_gain" | "gapless" | "auto_play_next" | "history_enabled"
             if !matches!(value.as_str(), "true" | "false") =>
         {
@@ -1519,6 +1834,10 @@ mod tests {
         assert!(state.player.is_paused(), "Player must be paused");
         tokio::time::sleep(Duration::from_millis(500)).await;
         let pos_paused = state.player.position();
+        assert!(
+            pos_paused - pos1 < 1.0,
+            "Position should stop advancing while paused: before={pos1}, paused={pos_paused}"
+        );
 
         // 7. Test Resume
         state.player.play().expect("resume");

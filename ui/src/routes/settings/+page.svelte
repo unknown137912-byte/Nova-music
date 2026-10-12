@@ -28,12 +28,16 @@
   let cookieInput = '';
   let audioQuality = 'high';
   let downloadQuality = 'high';
+  let downloadFormat = 'original';
   let replayGain = true;
   let gaplessPlayback = true;
   let autoPlayNext = true;
   let playbackSpeed = 1;
   let volume = 85;
   let cosmicTheme = 'nebula';
+  let accentColor = '#f46b82';
+  let appearanceBackdrop = 'artwork';
+  let motionPreference = 'full';
   let downloadDirectory = '';
   let storageInfo: any = null;
   let optimizingDatabase = false;
@@ -41,7 +45,7 @@
   let closeToTray = false;
   let songNotifications = false;
   let launchAtStartup = false;
-  let appVersion = '1.0.0';
+  let appVersion = '1.2.0';
   let availableUpdate: any = null;
   let updateBusy = false;
   let updateProgress = 0;
@@ -108,12 +112,16 @@
         settings = loadedSettings || {};
         audioQuality = settings.quality || 'high';
         downloadQuality = settings.download_quality || settings.quality || 'high';
+        downloadFormat = settings.download_format || 'original';
         replayGain = settings.replay_gain !== 'false';
         gaplessPlayback = settings.gapless !== 'false';
         autoPlayNext = settings.auto_play_next !== 'false';
         playbackSpeed = Number(settings.playback_speed || 1);
         volume = Number(settings.volume || 85);
         cosmicTheme = settings.cosmic_theme || 'nebula';
+        accentColor = settings.accent_color || '#f46b82';
+        appearanceBackdrop = settings.appearance_backdrop || 'artwork';
+        motionPreference = settings.motion_preference || 'full';
         downloadDirectory = settings.download_directory || '';
         googleOAuthClientId = settings.google_oauth_client_id || '';
         historyEnabled = settings.history_enabled !== 'false';
@@ -145,6 +153,9 @@
       }
       if (key === 'auto_play_next') {
         window.dispatchEvent(new CustomEvent('nova-autoplay-changed', { detail: String(value) === 'true' }));
+      }
+      if (['accent_color', 'appearance_backdrop', 'motion_preference'].includes(key)) {
+        window.dispatchEvent(new CustomEvent('nova-appearance-changed', { detail: { key, value: String(value) } }));
       }
       authMessage = '';
       return true;
@@ -423,13 +434,15 @@
         <div class="settings-group-label">COLOR THEME</div>
         <div class="setting-row">
           <div class="setting-icon"><Palette size={17} /></div>
-          <div class="setting-copy"><strong>Accent theme</strong><small>Choose the color used for active controls and playback.</small></div>
-          <select bind:value={cosmicTheme} on:change={changeTheme} aria-label="Accent theme">
-            <option value="nebula">Aurora green</option><option value="cyber">Arctic cyan</option><option value="deepspace">Monochrome</option>
+          <div class="setting-copy"><strong>Accent color</strong><small>Choose the color used for active controls, buttons, and playback.</small></div>
+          <select bind:value={accentColor} on:change={() => saveSetting('accent_color', accentColor)} aria-label="Accent color">
+            <option value="#f46b82">Rose</option><option value="#51d6b2">Aurora green</option><option value="#5bc4ee">Arctic cyan</option><option value="#a78bfa">Violet</option><option value="#f2b75e">Amber</option><option value="#eeeeee">Monochrome</option>
           </select>
         </div>
+        <div class="setting-row"><div class="setting-icon"><Palette size={17} /></div><div class="setting-copy"><strong>Custom accent</strong><small>Fine tune NOVA’s highlight color.</small></div><div class="accent-picker"><input type="color" bind:value={accentColor} on:change={() => saveSetting('accent_color', accentColor)} aria-label="Custom accent color" /><span>{accentColor.toUpperCase()}</span></div></div>
         <div class="settings-group-label">INTERFACE</div>
-        <div class="setting-row"><div class="setting-icon"><AudioLines size={17} /></div><div class="setting-copy"><strong>Artwork and ambient colors</strong><small>Album art colors are used on the full-screen player.</small></div><span class="feature-tag">ON</span></div>
+        <div class="setting-row"><div class="setting-icon"><Monitor size={17} /></div><div class="setting-copy"><strong>Background style</strong><small>Set the glow behind NOVA’s pages.</small></div><select bind:value={appearanceBackdrop} on:change={() => saveSetting('appearance_backdrop', appearanceBackdrop)} aria-label="Background style"><option value="artwork">Artwork glow</option><option value="gradient">Aurora gradient</option><option value="flat">Minimal dark</option></select></div>
+        <div class="setting-row"><div class="setting-icon"><AudioLines size={17} /></div><div class="setting-copy"><strong>Motion effects</strong><small>Choose smooth transitions or reduce animation.</small></div><select bind:value={motionPreference} on:change={() => saveSetting('motion_preference', motionPreference)} aria-label="Motion effects"><option value="full">Full motion</option><option value="reduced">Reduced motion</option></select></div>
         <div class="theme-preview-row"><div class="theme-preview green-preview"><span></span><i></i><b></b></div><div class="theme-preview cyan-preview"><span></span><i></i><b></b></div><div class="theme-preview mono-preview"><span></span><i></i><b></b></div></div>
       {:else if activeSection === 'Playback'}
         <div class="settings-group-label">STREAMING</div>
@@ -455,6 +468,7 @@
         <div class="settings-group-label">OFFLINE MUSIC</div>
         <div class="setting-row"><div class="setting-icon"><FolderOpen size={17} /></div><div class="setting-copy"><strong>Download folder</strong><small class="path-text">{downloadDirectory || '~/Music/NOVA Music Downloads'}</small></div><button class="secondary-button" on:click={chooseDownloadFolder}>Choose folder</button></div>
         <div class="setting-row"><div class="setting-icon"><Download size={17} /></div><div class="setting-copy"><strong>Download quality</strong><small>Maximum quality used when saving a track.</small></div><select bind:value={downloadQuality} on:change={() => saveSetting('download_quality', downloadQuality)}><option value="high">Highest available</option><option value="medium">Standard</option><option value="low">Data saver</option></select></div>
+        <div class="setting-row"><div class="setting-icon"><AudioLines size={17} /></div><div class="setting-copy"><strong>Download format</strong><small>{downloadFormat === 'flac' ? 'FLAC preserves the downloaded stream during lossless encoding; it cannot restore detail absent from the source.' : 'Choose the file type saved for future downloads.'}</small></div><select bind:value={downloadFormat} on:change={() => saveSetting('download_format', downloadFormat)} aria-label="Download format"><option value="original">Original source</option><option value="mp3">MP3</option><option value="opus">Opus</option><option value="flac">FLAC (lossless file)</option></select></div>
         <button class="primary-button download-button" on:click={downloadCurrentTrack} disabled={isLoading}><Download size={16} /> {isLoading ? 'Downloading…' : 'Download current track'}</button>
         <div class="settings-group-label storage-label">LOCAL DATA</div>
         <div class="storage-summary">
@@ -549,7 +563,10 @@
   .cookie-details p { color: #8e9393; font-size: 9px; line-height: 1.4; }
   .cookie-details textarea { width: 100%; padding: 8px; resize: vertical; }
   .cookie-details button { margin-top: 7px; }
-  .feature-tag, .version-pill { padding: 5px 8px; color: #c6caca; background: #272a2a; border-radius: 12px; font-size: 8px; font-weight: 750; letter-spacing: .06em; }
+  .version-pill { padding: 5px 8px; color: #c6caca; background: #272a2a; border-radius: 12px; font-size: 8px; font-weight: 750; letter-spacing: .06em; }
+  .accent-picker { display: inline-flex; align-items: center; gap: 8px; min-width: 118px; padding: 5px 8px; color: #c4c8c8; background: #1b1d1d; border: 1px solid rgba(255,255,255,.1); border-radius: 8px; }
+  .accent-picker input { width: 25px; height: 25px; padding: 0; overflow: hidden; background: transparent; border: 0; border-radius: 6px; cursor: pointer; }
+  .accent-picker span { font-size: 9px; letter-spacing: .04em; }
   .theme-preview-row { display: flex; gap: 10px; padding: 14px 4px; }
   .theme-preview { position: relative; height: 92px; min-width: 0; flex: 1; overflow: hidden; background: #0c0d0d; border: 1px solid rgba(255,255,255,.09); border-radius: 8px; }
   .theme-preview span { position: absolute; left: 12px; top: 13px; width: 44%; height: 6px; background: #dfe3e3; border-radius: 4px; }

@@ -44,7 +44,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install native audio and bundling dependencies
-        run: brew install mpv dylibbundler
+        run: brew install mpv ffmpeg dylibbundler
 
       - name: Install workspace dependencies
         run: |
@@ -142,6 +142,15 @@ jobs:
           set -euo pipefail
           app='target/${{ matrix.target }}/release/bundle/macos/NOVA Music.app'
           version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          ffmpeg="$app/Contents/Resources/ffmpeg"
+          test -x "$ffmpeg"
+          encoders=$("$ffmpeg" -hide_banner -encoders 2>&1)
+          for encoder in libmp3lame libopus flac; do
+            if ! grep -Fq " $encoder " <<<"$encoders"; then
+              echo "Bundled FFmpeg is missing the $encoder encoder." >&2
+              exit 1
+            fi
+          done
           find "$app" -type f -print0 | while IFS= read -r -d '' file; do
             if otool -L "$file" 2>/dev/null | grep -E '/(opt/homebrew|usr/local/(Cellar|opt))/' >/dev/null; then
               echo "Unbundled Homebrew library found in $file" >&2

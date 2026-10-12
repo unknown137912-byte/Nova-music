@@ -17,6 +17,10 @@
   let recentTracks: any[] = [];
   let listeningMix: any = null;
   let activeChipParams: string | null = null;
+  let homeContinuation = '';
+  let loadingMore = false;
+  let loadMoreError = '';
+  let homeRequestSerial = 0;
   let refreshListener: (() => void) | undefined;
   let currentGreeting = 'Good evening';
 
@@ -42,24 +46,31 @@
   }
 
   async function loadHome(params?: string | null) {
+    const requestSerial = ++homeRequestSerial;
     loading = true;
     error = null;
+    loadingMore = false;
+    loadMoreError = '';
+    homeContinuation = '';
     activeChipParams = params || null;
     const requests = await Promise.allSettled([
       invoke('get_home', { params: params || null }),
       invoke('get_settings'),
-      invoke('get_listening_recommendations'),
+      params ? Promise.resolve(null) : invoke('get_listening_recommendations'),
     ]);
 
     if (requests[0].status === 'fulfilled') {
+      if (requestSerial !== homeRequestSerial) return;
       homeData = requests[0].value;
+      homeContinuation = String(homeData?.continuation || '');
     } else {
+      if (requestSerial !== homeRequestSerial) return;
       const err: any = requests[0].reason;
       error = typeof err === 'string' ? err : (err?.message || 'Could not load your YouTube Music home');
       homeData = null;
     }
     const settings: any = requests[1].status === 'fulfilled' ? requests[1].value : {};
-    if (settings?.history_enabled === 'false') {
+    if (params || settings?.history_enabled === 'false') {
       recentTracks = [];
       listeningMix = null;
     } else {
@@ -67,7 +78,50 @@
       catch (_) { recentTracks = []; }
       listeningMix = requests[2].status === 'fulfilled' ? requests[2].value : null;
     }
-    loading = false;
+    if (requestSerial === homeRequestSerial) loading = false;
+  }
+
+  async function loadMoreHome() {
+    if (!homeContinuation || loadingMore || loading || !homeData) return;
+    const continuation = homeContinuation;
+    const requestSerial = homeRequestSerial;
+    loadingMore = true;
+    loadMoreError = '';
+    try {
+      const page: any = await invoke('get_home_continuation', { continuation });
+      if (requestSerial !== homeRequestSerial) return;
+      const combined = [...(homeData?.sections || [])];
+      for (const section of page?.sections || []) {
+        const title = String(section.title || 'Recommended');
+        const existing = combined.find((item) => String(item.title || 'Recommended') === title);
+        if (!existing) combined.push(section);
+        else {
+          const seen = new Set((existing.items || []).map((item: any) => String(item.id || item.videoId || item.video_id || item.title)));
+          existing.items = [...(existing.items || []), ...(section.items || []).filter((item: any) => {
+            const key = String(item.id || item.videoId || item.video_id || item.title);
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          })];
+        }
+      }
+      homeData = { ...homeData, sections: combined, continuation: page?.continuation || null };
+      homeContinuation = String(page?.continuation || '');
+    } catch (reason: any) {
+      if (requestSerial === homeRequestSerial) {
+        loadMoreError = typeof reason === 'string' ? reason : (reason?.message || 'Could not load more recommendations.');
+      }
+    } finally {
+      if (requestSerial === homeRequestSerial) loadingMore = false;
+    }
+  }
+
+  function observeHomeEnd(node: HTMLElement) {
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) void loadMoreHome();
+    }, { rootMargin: '700px 0px' });
+    observer.observe(node);
+    return { destroy: () => observer.disconnect() };
   }
 
   onMount(() => {
@@ -129,11 +183,12 @@
   }
 
   $: greetingName = accountName ? accountName.split('@')[0] : 'there';
+  $: showPersonalSections = activeChipParams === null;
   $: sections = [
     ...(homeData?.sections || []),
-    ...(listeningMix?.items?.length ? [{
+    ...(!activeChipParams && listeningMix?.items?.length ? [{
       id: 'nova-listening-mix',
-      title: listeningMix.seed?.artist ? `Because you listen to ${listeningMix.seed.artist}` : 'Picked for your taste',
+      title: 'Picked for your taste',
       items: listeningMix.items,
     }] : []),
   ];
@@ -172,7 +227,7 @@
       <button on:click={() => loadHome(activeChipParams)}>Try again</button>
     </div>
   {:else}
-    {#if recentTracks.length}
+    {#if showPersonalSections && recentTracks.length}
       <section class="home-section jump-section">
         <div class="home-section-heading">
           <div class="section-title-wrap"><Clock size={17} /><h2>Jump back in</h2></div>
@@ -191,12 +246,12 @@
           {/each}
         </div>
       </section>
-    {:else}
+    {:else if showPersonalSections}
       <section class="home-section shortcut-section">
         <div class="home-section-heading">
           <div class="section-title-wrap"><LayoutGrid size={17} /><h2>Shortcuts</h2></div>
         </div>
-        <button class="shortcut-card" on:click={() => onOpenPlaylist('LM')}>
+        <button class="shortcut-card" on:click={() => onOpenPlaylist('NOVA_LIKED')}>
           <span class="shortcut-art"><Heart size={21} fill="currentColor" /></span>
           <span><strong>Liked Music</strong><small>Your personal collection</small></span>
           <span class="recent-play"><Play size={15} fill="currentColor" /></span>
@@ -235,11 +290,18 @@
       {/if}
     {/each}
 
+    {#if homeContinuation}
+      <div class="home-more-sentinel" use:observeHomeEnd aria-hidden="true"></div>
+      {#if loadMoreError}<p class="home-more-error" role="status">{loadMoreError}</p>{/if}
+      <button class="home-load-more" on:click={loadMoreHome} disabled={loadingMore}>{loadingMore ? 'Finding more music…' : 'Load more recommendations'}</button>
+    {/if}
+
     {#if sections.length === 0 && recentTracks.length === 0}
       <div class="home-empty">
         <div class="empty-icon"><Music2 size={26} /></div>
-        <h2>Start with a search</h2>
-        <p>Your YouTube Music home and recent plays will appear here when available.</p>
+        <h2>{activeChipParams ? 'No matching picks yet' : 'Start with a search'}</h2>
+        <p>{activeChipParams ? 'YouTube Music has no recommendations for this mood right now. Try another mood or refresh the page.' : 'Your YouTube Music home and recent plays will appear here when available.'}</p>
+        {#if activeChipParams}<button class="refresh-mood" on:click={() => loadHome(activeChipParams)}>Refresh this mood</button>{/if}
       </div>
     {/if}
   {/if}
@@ -312,6 +374,12 @@
   .home-empty { min-height: 300px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px; text-align: center; }
   .home-empty h2 { margin-top: 4px; }
   .home-empty p { max-width: 280px; line-height: 1.5; }
+  .home-more-sentinel { width: 100%; height: 1px; }
+  .home-more-error { margin: 0 auto; color: #ffadad; text-align: center; font-size: 11px; }
+  .home-load-more, .refresh-mood { min-height: 34px; display: block; margin: 12px auto 24px; padding: 0 15px; color: #e7e9e9; background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.1); border-radius: 18px; font-size: 10px; cursor: pointer; transition: background .18s ease, transform .18s ease; }
+  .home-load-more:hover:not(:disabled), .refresh-mood:hover { background: rgba(255,255,255,.13); transform: translateY(-1px); }
+  .home-load-more:disabled { opacity: .55; cursor: wait; }
+  .refresh-mood { margin: 10px 0 0; }
   @media (max-width: 1100px) { .recent-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } .shelf-scroller { grid-auto-columns: minmax(125px, 1fr); } }
   @media (max-width: 760px) { .home-container { padding: 25px 18px 60px; } .recent-grid { grid-template-columns: 1fr; } .greeting-block h1 { font-size: 23px; } }
 </style>

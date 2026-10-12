@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -16,6 +16,9 @@ const binary = join(targetDir, 'nova-music');
 const brewPrefix = execFileSync('brew', ['--prefix'], { encoding: 'utf8' }).trim();
 const architecture = 'arm64';
 const librariesDir = join(root, 'target', 'macos-libraries', architecture);
+const bundledToolsDir = join(root, 'target', 'macos-tools', architecture);
+const ffmpegSource = execFileSync('realpath', [join(brewPrefix, 'bin', 'ffmpeg')], { encoding: 'utf8' }).trim();
+const bundledFfmpeg = join(bundledToolsDir, 'ffmpeg');
 const bundleConfig = join(root, 'target', `tauri-bundle-${architecture}.json`);
 
 function run(command, args, options = {}) {
@@ -40,7 +43,11 @@ if (/@executable_path\/\.\.\/Frameworks\/libmpv/.test(binaryLibraries)) {
 }
 
 await rm(librariesDir, { recursive: true, force: true });
+await rm(bundledToolsDir, { recursive: true, force: true });
 await mkdir(librariesDir, { recursive: true });
+await mkdir(bundledToolsDir, { recursive: true });
+await copyFile(ffmpegSource, bundledFfmpeg);
+await chmod(bundledFfmpeg, 0o755);
 
 run('dylibbundler', [
   '-cd', '-of', '-b',
@@ -48,6 +55,22 @@ run('dylibbundler', [
   '-d', librariesDir,
   '-p', '@executable_path/../Frameworks',
   '-s', join(brewPrefix, 'lib'),
+]);
+
+const ffmpegDependencies = execFileSync('otool', ['-L', ffmpegSource], { encoding: 'utf8' });
+const ffmpegSearchPaths = new Set([join(brewPrefix, 'lib')]);
+for (const line of ffmpegDependencies.split('\n').slice(1)) {
+  const dependency = line.trim().split(' (compatibility')[0];
+  if (dependency.startsWith(`${brewPrefix}/`) || dependency.startsWith('/usr/local/Cellar/') || dependency.startsWith('/usr/local/opt/')) {
+    ffmpegSearchPaths.add(join(dependency, '..'));
+  }
+}
+run('dylibbundler', [
+  '-cd', '-of', '-b',
+  '-x', bundledFfmpeg,
+  '-d', librariesDir,
+  '-p', '@executable_path/../Frameworks',
+  ...[...ffmpegSearchPaths].flatMap((path) => ['-s', path]),
 ]);
 
 const libraries = (await readdir(librariesDir))
@@ -58,7 +81,7 @@ if (!libraries.some((path) => path.includes('libmpv'))) {
   throw new Error('Bundling did not include libmpv; the app would not play audio on a clean Mac.');
 }
 
-const machOFiles = [binary, ...libraries];
+const machOFiles = [binary, bundledFfmpeg, ...libraries];
 for (const file of machOFiles) {
   const loadCommands = execFileSync('otool', ['-L', file], { encoding: 'utf8' });
   const badLoadPath = loadCommands.split('\n').find((line) => /\/(?:opt\/homebrew|usr\/local\/(?:Cellar|opt))\//.test(line));
@@ -81,6 +104,9 @@ const config = {
     macOS: {
       frameworks: libraries,
       hardenedRuntime: hasDeveloperIdentity,
+    },
+    resources: {
+      [bundledFfmpeg]: 'ffmpeg',
     },
   },
 };

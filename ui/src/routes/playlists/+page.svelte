@@ -31,17 +31,26 @@
     return `hsl(${(hash >>> 0) % 360} 62% 32%)`;
   }
 
+  function artworkUrl(source: string): string {
+    return String(source || '').replace(/(?:=|-)w\d+-h\d+/g, (match) => match[0] === '=' ? '=w1200-h1200' : '-w1200-h1200');
+  }
+
   onMount(() => {
     const refresh = (event: Event) => {
       if (activePlaylistId && (event as CustomEvent<string>).detail === activePlaylistId) void loadCollection(activePlaylistId);
     };
     window.addEventListener('nova-playlist-updated', refresh);
+    const refreshLiked = () => {
+      if (activePlaylistId === 'NOVA_LIKED') void loadCollection('NOVA_LIKED');
+    };
+    window.addEventListener('nova-liked-changed', refreshLiked);
     const refreshLibrary = () => {
       if (!activePlaylistId) void loadOverview();
     };
     window.addEventListener('nova-local-playlists-changed', refreshLibrary);
     return () => {
       window.removeEventListener('nova-playlist-updated', refresh);
+      window.removeEventListener('nova-liked-changed', refreshLiked);
       window.removeEventListener('nova-local-playlists-changed', refreshLibrary);
     };
   });
@@ -60,7 +69,9 @@
     try {
       const result: any = await invoke('get_library');
       if (request !== requestVersion) return;
-      libraryPlaylists = Array.isArray(result) ? result : (result?.playlists || []);
+      libraryPlaylists = (Array.isArray(result) ? result : (result?.playlists || []))
+        .filter((item: any) => !['LM', 'VLLM'].includes(String(item?.id || item?.browseId || item?.browse_id || ''))
+          && !/^(liked music|liked songs)$/i.test(String(item?.title || item?.name || '')));
       libraryAlbums = result?.albums || [];
       libraryArtists = result?.artists || [];
     } catch (reason: any) {
@@ -78,6 +89,25 @@
     playlistMessage = '';
     confirmingDelete = false;
     currentCollection = null;
+    if (id === 'NOVA_LIKED') {
+      try {
+        const tracks: any[] = await invoke('get_liked_tracks');
+        if (request !== requestVersion) return;
+        const likedTracks = Array.isArray(tracks) ? tracks : [];
+        currentCollection = {
+          id,
+          title: 'Liked Music',
+          subtitle: 'Saved on this device',
+          thumbnail: likedTracks[0]?.thumbnail || '',
+          items: likedTracks,
+        };
+      } catch (reason: any) {
+        if (request === requestVersion) error = typeof reason === 'string' ? reason : (reason?.message || 'Could not load your liked music.');
+      } finally {
+        if (request === requestVersion) loading = false;
+      }
+      return;
+    }
     const isAlbum = /^(MPRE|OLAK)/i.test(id);
     const firstCommand = isAlbum ? 'get_album' : 'get_playlist';
     const firstKey = isAlbum ? { albumId: id } : { playlistId: id };
@@ -109,7 +139,8 @@
   $: collectionItems = displayList(currentCollection?.items);
   $: isAlbum = Boolean(currentCollection && (currentCollection.artist || String(currentCollection.subtitle || '').toLowerCase().includes('album')));
   $: isLocalPlaylist = Boolean(activePlaylistId?.startsWith('NOVA_LOCAL_'));
-  $: currentCover = String(currentCollection?.thumbnail || currentCollection?.cover || '');
+  $: isLikedCollection = activePlaylistId === 'NOVA_LIKED';
+  $: currentCover = artworkUrl(String(currentCollection?.thumbnail || currentCollection?.cover || ''));
   $: collectionTint = playlistTint(currentCover || String(currentCollection?.id || currentCollection?.title || 'nova'));
   $: visibleItems = (category === 'Albums' ? libraryAlbums : category === 'Artists' ? libraryArtists : libraryPlaylists)
     .filter((item) => !filterText || String(item.title || item.name || '').toLowerCase().includes(filterText.toLowerCase()));
@@ -202,7 +233,7 @@
   }
 </script>
 
-<div class="collections-page" style={`--playlist-tint:${collectionTint}`}>
+<div class="collections-page" class:has-collection={Boolean(currentCollection)} style={`--playlist-tint:${collectionTint};--collection-artwork:url(\"${currentCover}\")`}>
   {#if loading}
     <div class="page-state"><span class="spinner"></span><p>{activePlaylistId ? 'Opening your collection…' : 'Loading your library…'}</p></div>
   {:else if error}
@@ -210,9 +241,9 @@
   {:else if currentCollection}
     <section class="collection-hero" style={`--cover:url("${currentCollection.thumbnail || currentCollection.cover || ''}")`}>
       <div class="collection-hero-content">
-        <div class="collection-cover"><img src={currentCollection.thumbnail || currentCollection.cover || '/placeholder.jpg'} alt="" /></div>
+        <div class="collection-cover"><img src={currentCover || '/placeholder.jpg'} alt="" /></div>
         <div class="collection-info">
-          <span class="collection-kind">{isAlbum ? 'Album' : 'Playlist'}</span>
+          <span class="collection-kind">{isLikedCollection ? 'Your music' : isAlbum ? 'Album' : 'Playlist'}</span>
           <h1>{currentCollection.title || 'Untitled collection'}</h1>
           {#if currentCollection.description}<p class="collection-description">{currentCollection.description}</p>{/if}
           <div class="collection-meta">
@@ -290,9 +321,11 @@
 </div>
 
 <style>
-  .collections-page { min-height: 100%; padding-bottom: 88px; color: #f5f7f5; background: radial-gradient(ellipse at 48% 0%, color-mix(in srgb, var(--playlist-tint) 37%, transparent), transparent 52%), #080909; transition: background .35s ease; }
+  .collections-page { position: relative; min-height: 100%; padding-bottom: 88px; color: #f5f7f5; background: radial-gradient(ellipse at 48% 0%, color-mix(in srgb, var(--playlist-tint) 37%, transparent), transparent 52%), #080909; transition: background .35s ease; }
+  .collections-page.has-collection::before { position: fixed; z-index: 0; inset: 56px 0 86px; background-image: linear-gradient(180deg, rgba(8,9,9,.48), rgba(8,9,9,.73)), var(--collection-artwork); background-size: cover; background-position: center 36%; filter: blur(48px) saturate(1.38); opacity: .36; transform: scale(1.08); pointer-events: none; content: ''; transition: opacity .4s ease, filter .5s ease; }
+  .collections-page.has-collection > :not(.collection-backdrop) { position: relative; z-index: 1; }
   .collection-hero { position: relative; isolation: isolate; min-height: 312px; display: flex; align-items: end; overflow: hidden; padding: 28px clamp(24px,4vw,58px) 26px; background: linear-gradient(180deg, rgba(8,9,9,.1), rgba(8,9,9,.5) 45%, #080909 100%); }
-  .collection-hero::before { position: absolute; z-index: -2; inset: -30px; background-image: radial-gradient(ellipse at center, color-mix(in srgb, var(--playlist-tint) 68%, transparent), transparent 72%), var(--cover); background-color: var(--playlist-tint); background-position: center, center 38%; background-size: cover; filter: blur(36px) saturate(1.3); opacity: .72; transform: scale(1.15); content: ''; transition: background-color .35s ease; }
+  .collection-hero::before { position: absolute; z-index: -2; inset: -30px; background-image: radial-gradient(ellipse at center, color-mix(in srgb, var(--playlist-tint) 68%, transparent), transparent 72%), var(--cover); background-color: var(--playlist-tint); background-position: center, center 38%; background-size: cover; filter: blur(42px) saturate(1.42); opacity: .82; transform: scale(1.15); content: ''; transition: background-color .35s ease; }
   .collection-hero::after { position: absolute; z-index: -1; inset: 0; background: linear-gradient(90deg, rgba(7,8,8,.55), rgba(7,8,8,.14) 65%, rgba(7,8,8,.35)), linear-gradient(0deg, #080909 0%, rgba(8,9,9,.2) 80%); content: ''; }
   .collection-hero-content { width: 100%; display: flex; align-items: end; gap: clamp(20px,3vw,32px); }
   .collection-cover { width: clamp(150px,19vw,228px); flex: 0 0 clamp(150px,19vw,228px); aspect-ratio: 1; overflow: hidden; border: 1px solid rgba(255,255,255,.16); border-radius: 7px; box-shadow: 0 20px 42px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.2); }

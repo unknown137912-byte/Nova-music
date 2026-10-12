@@ -204,8 +204,95 @@ impl Db {
             "CREATE INDEX IF NOT EXISTS idx_local_playlist_tracks_order ON local_playlist_tracks(playlist_id, position)",
             [],
         )?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS liked_tracks (
+                track_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                artist TEXT NOT NULL DEFAULT '',
+                album TEXT NOT NULL DEFAULT '',
+                thumbnail_url TEXT NOT NULL DEFAULT '',
+                duration_seconds REAL NOT NULL DEFAULT 0,
+                artist_id TEXT,
+                album_id TEXT,
+                liked_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_liked_tracks_recent ON liked_tracks(liked_at DESC)",
+            [],
+        )?;
 
         Ok(())
+    }
+
+    pub async fn set_liked_track(
+        &self,
+        track_id: &str,
+        title: &str,
+        artist: &str,
+        album: &str,
+        thumbnail_url: &str,
+        duration_seconds: f64,
+        artist_id: Option<&str>,
+        album_id: Option<&str>,
+        liked: bool,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        if liked {
+            conn.execute(
+                "INSERT INTO liked_tracks (track_id, title, artist, album, thumbnail_url, duration_seconds, artist_id, album_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT(track_id) DO UPDATE SET
+                    title = excluded.title,
+                    artist = excluded.artist,
+                    album = excluded.album,
+                    thumbnail_url = excluded.thumbnail_url,
+                    duration_seconds = excluded.duration_seconds,
+                    artist_id = excluded.artist_id,
+                    album_id = excluded.album_id,
+                    liked_at = CURRENT_TIMESTAMP",
+                rusqlite::params![track_id, title, artist, album, thumbnail_url, duration_seconds, artist_id, album_id],
+            )?;
+        } else {
+            conn.execute("DELETE FROM liked_tracks WHERE track_id = ?1", [track_id])?;
+        }
+        Ok(())
+    }
+
+    pub async fn get_liked_tracks(
+        &self,
+    ) -> std::result::Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        let mut statement = conn.prepare(
+            "SELECT track_id, title, artist, album, thumbnail_url, duration_seconds, artist_id, album_id, liked_at
+             FROM liked_tracks ORDER BY liked_at DESC, title COLLATE NOCASE",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, String>(0)?,
+                "videoId": row.get::<_, String>(0)?,
+                "track_id": row.get::<_, String>(0)?,
+                "title": row.get::<_, String>(1)?,
+                "artist": row.get::<_, String>(2)?,
+                "album": row.get::<_, String>(3)?,
+                "thumbnail": row.get::<_, String>(4)?,
+                "duration": row.get::<_, f64>(5)?,
+                "duration_seconds": row.get::<_, f64>(5)?,
+                "artistId": row.get::<_, Option<String>>(6)?,
+                "albumId": row.get::<_, Option<String>>(7)?,
+                "likedAt": row.get::<_, String>(8)?,
+                "liked": true,
+                "rating": "like"
+            }))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     pub async fn create_local_playlist(
@@ -802,6 +889,56 @@ mod tests {
         assert_eq!(history[0]["playCount"], 2);
         assert_eq!(history[0]["title"], "Updated title");
         assert_eq!(history[0]["duration"], 135.0);
+
+        drop(db);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+    }
+
+    #[tokio::test]
+    async fn liked_tracks_are_saved_locally_and_removed_when_unliked() {
+        let path = temporary_db_path("liked-tracks");
+        let db = Db::open(&path).expect("open test database");
+        db.set_liked_track(
+            "track-1",
+            "First title",
+            "Artist",
+            "Album",
+            "cover",
+            120.0,
+            Some("artist-1"),
+            Some("album-1"),
+            true,
+        )
+        .await
+        .expect("save liked track");
+
+        let liked = db.get_liked_tracks().await.expect("read liked tracks");
+        assert_eq!(liked.len(), 1);
+        assert_eq!(liked[0]["id"], "track-1");
+        assert_eq!(liked[0]["title"], "First title");
+        assert_eq!(liked[0]["artist"], "Artist");
+        assert_eq!(liked[0]["liked"], true);
+
+        db.set_liked_track(
+            "track-1",
+            "First title",
+            "Artist",
+            "Album",
+            "cover",
+            120.0,
+            Some("artist-1"),
+            Some("album-1"),
+            false,
+        )
+        .await
+        .expect("remove unliked track");
+        assert!(db
+            .get_liked_tracks()
+            .await
+            .expect("read empty likes")
+            .is_empty());
 
         drop(db);
         let _ = std::fs::remove_file(&path);

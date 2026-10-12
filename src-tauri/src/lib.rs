@@ -39,11 +39,6 @@ fn init_logging(dir: &std::path::Path) {
         .init();
 }
 
-fn fatal(what: &str, detail: &str) -> ! {
-    tracing::error!("fatal at startup: {what}: {detail}");
-    std::process::exit(1)
-}
-
 pub fn run() {
     let builder = tauri::Builder::default();
 
@@ -74,10 +69,12 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::greet,
             commands::get_home,
+            commands::get_home_continuation,
             commands::get_playlist,
             commands::get_album,
             commands::get_artist,
             commands::get_library,
+            commands::get_liked_tracks,
             commands::create_local_playlist,
             commands::add_track_to_local_playlist,
             commands::delete_local_playlist,

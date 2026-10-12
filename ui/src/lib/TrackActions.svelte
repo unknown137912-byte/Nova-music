@@ -10,6 +10,19 @@
   let playlistsOpen = false;
   let likedState = liked;
   let previousLiked = liked;
+  let dropUp = false;
+  let menuEl: HTMLDivElement;
+
+  function toggleMenu() {
+    open = !open;
+    playlistsOpen = false;
+    if (!open) return;
+    requestAnimationFrame(() => {
+      if (!menuEl) return;
+      const bounds = menuEl.getBoundingClientRect();
+      dropUp = bounds.bottom > window.innerHeight - 12 && bounds.top > bounds.height + 12;
+    });
+  }
 
   $: if (liked !== previousLiked) {
     previousLiked = liked;
@@ -27,11 +40,11 @@
 <svelte:window on:click={() => open = false} />
 
 <div class="track-actions">
-  <button class="more-button" aria-label="More song actions" title="More options" aria-expanded={open} on:click|stopPropagation={() => open = !open}>
+  <button class="more-button" aria-label="More song actions" title="More options" aria-expanded={open} on:click|stopPropagation={toggleMenu}>
     <MoreHorizontal size={18} />
   </button>
   {#if open}
-    <div class="actions-menu" role="menu">
+    <div class="actions-menu" class:drop-up={dropUp} role="menu" bind:this={menuEl}>
       <button role="menuitem" on:click|stopPropagation={() => choose('play-next')}><ListEnd size={15} /> Play next</button>
       <button role="menuitem" on:click|stopPropagation={() => choose('queue')}><ListPlus size={15} /> Add to queue</button>
       <button role="menuitem" on:click|stopPropagation={() => choose('like')}><Heart size={15} fill={likedState ? 'currentColor' : 'none'} /> {likedState ? 'Remove from Liked Music' : 'Add to Liked Music'}</button>
@@ -60,7 +73,8 @@
   .track-actions { position: relative; display: inline-flex; flex: 0 0 auto; }
   .more-button { width: 34px; height: 34px; display: grid; place-items: center; color: rgba(255,255,255,.62); background: transparent; border: 0; border-radius: 50%; cursor: pointer; opacity: .58; transition: color .18s ease, background .18s ease, opacity .18s ease, transform .18s ease; }
   .more-button:hover, .more-button[aria-expanded="true"] { color: #fff; background: rgba(255,255,255,.12); opacity: 1; transform: scale(1.04); }
-  .actions-menu { position: absolute; z-index: 30; top: calc(100% + 5px); right: 0; width: 210px; padding: 5px; color: #f5f5f5; background: rgba(26,28,30,.94); border: 1px solid rgba(255,255,255,.12); border-radius: 12px; box-shadow: 0 16px 42px rgba(0,0,0,.48), inset 0 1px 0 rgba(255,255,255,.08); backdrop-filter: blur(24px) saturate(1.4); animation: menu-in .14s ease-out both; }
+  .actions-menu { position: absolute; z-index: 30; top: calc(100% + 5px); right: 0; width: 210px; max-height: min(65vh, 420px); overflow-y: auto; padding: 5px; color: #f5f5f5; background: rgba(26,28,30,.94); border: 1px solid rgba(255,255,255,.12); border-radius: 12px; box-shadow: 0 16px 42px rgba(0,0,0,.48), inset 0 1px 0 rgba(255,255,255,.08); backdrop-filter: blur(24px) saturate(1.4); animation: menu-in .14s ease-out both; scrollbar-width: thin; }
+  .actions-menu.drop-up { top: auto; bottom: calc(100% + 5px); animation-name: menu-in-up; }
   .actions-menu button { width: 100%; min-height: 36px; display: flex; align-items: center; gap: 10px; padding: 0 10px; color: rgba(255,255,255,.86); text-align: left; background: transparent; border: 0; border-radius: 8px; font-size: 11px; cursor: pointer; transition: background .14s ease, color .14s ease; }
   .actions-menu button:hover { color: #fff; background: rgba(var(--cover-rgb, 244 107 130),.18); }
   .actions-menu button :global(svg) { color: rgba(255,255,255,.65); }
@@ -69,4 +83,5 @@
   .playlist-submenu button { min-height: 31px; padding-left: 9px; font-size: 10px; }
   .playlist-submenu small { display: block; padding: 7px 8px; color: rgba(255,255,255,.48); font-size: 9px; line-height: 1.5; }
   @keyframes menu-in { from { opacity: 0; transform: translateY(-4px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+  @keyframes menu-in-up { from { opacity: 0; transform: translateY(4px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
 </style>
