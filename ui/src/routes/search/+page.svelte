@@ -2,7 +2,7 @@
 import { onMount } from 'svelte';
 import { invoke } from '@tauri-apps/api/core';
 import TrackActions from '../../lib/TrackActions.svelte';
-import { artworkUrl, recoverArtwork } from '../../lib/artwork';
+import { artworkFor, artworkUrl, recoverArtwork } from '../../lib/artwork';
 
 export let onPlayTrack: (track: any) => void = () => {};
 export let onOpenPlaylist: (id: string) => void = () => {};
@@ -126,7 +126,7 @@ function parseDuration(dStr: string): number {
               >
                 <div class="song-index">{idx + 1}</div>
                 <div class="song-thumb-box">
-                  <img src={artworkUrl(song.thumbnail, 900) || '/placeholder.svg'} alt="" class="song-thumb" on:error={(event) => recoverArtwork(event, song)} />
+                  <img src={artworkFor(song, 900)} alt="" class="song-thumb" on:error={(event) => recoverArtwork(event, song)} />
                   <div class="row-play-overlay">▶</div>
                 </div>
                 <div class="song-details">

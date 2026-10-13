@@ -1,7 +1,7 @@
 <script lang="ts">
 import { onMount } from 'svelte';
 import { invoke } from '@tauri-apps/api/core';
-import { artworkUrl, recoverArtwork } from '../../lib/artwork';
+import { artworkFor, artworkUrl, recoverArtwork } from '../../lib/artwork';
 
 let loading = true;
 let error = null;
@@ -69,7 +69,7 @@ function activateWithKeyboard(event: KeyboardEvent, action: () => unknown) {
             {#each library.likedSongs as song (song.id)}
               <div class="library-card" role="button" tabindex="0" on:click={() => invoke('play_track', { trackId: song.videoId || song.video_id || song.id })} on:keydown={(event) => activateWithKeyboard(event, () => invoke('play_track', { trackId: song.videoId || song.video_id || song.id }))}>
                 <div class="library-thumbnail">
-                  <img src={artworkUrl(song.thumbnail, 1000) || '/placeholder.svg'} alt={song.title} on:error={(event) => recoverArtwork(event, song)} />
+                  <img src={artworkFor(song, 1000)} alt={song.title} on:error={(event) => recoverArtwork(event, song)} />
                 </div>
                 <div class="library-info">
                   <h3>{song.title}</h3>
@@ -159,7 +159,7 @@ function activateWithKeyboard(event: KeyboardEvent, action: () => unknown) {
             {#each library.history as track (track.id)}
               <div class="library-card" role="button" tabindex="0" on:click={() => invoke('play_track', { trackId: track.videoId || track.video_id || track.id })} on:keydown={(event) => activateWithKeyboard(event, () => invoke('play_track', { trackId: track.videoId || track.video_id || track.id }))}>
                 <div class="library-thumbnail">
-                  <img src={artworkUrl(track.thumbnail, 1000) || '/placeholder.svg'} alt={track.title} on:error={(event) => recoverArtwork(event, track)} />
+                  <img src={artworkFor(track, 1000)} alt={track.title} on:error={(event) => recoverArtwork(event, track)} />
                 </div>
                 <div class="library-info">
                   <h4>{track.title}</h4>

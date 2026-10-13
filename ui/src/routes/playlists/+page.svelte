@@ -3,7 +3,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { Clock3, ListMusic, Music2, Play, Search, Sparkles, Plus, Trash2, Shuffle } from 'lucide-svelte';
   import TrackActions from '../../lib/TrackActions.svelte';
-  import { artworkUrl, recoverArtwork } from '../../lib/artwork';
+  import { artworkFor, artworkUrl, recoverArtwork } from '../../lib/artwork';
 
   export let activePlaylistId: string | null = null;
   export let onPlayTrack: (track: any) => void = () => {};
@@ -292,7 +292,7 @@
           <button class="track-row-main" on:click={() => playSong(track)} aria-label={`Play ${track.title || 'track'}`}>
             <span class="index-col track-index"><span class="row-number">{index + 1}</span><span class="row-play"><Play size={15} fill="currentColor" /></span></span>
             <span class="title-col track-title-cell">
-              <img src={artworkUrl(track.thumbnail || currentCollection.thumbnail || currentCollection.cover || '') || '/placeholder.svg'} alt="" on:error={(event) => recoverArtwork(event, track)} />
+              <img src={artworkFor(track, 1200, currentCollection.thumbnail || currentCollection.cover || '')} alt="" on:error={(event) => recoverArtwork(event, { ...track, fallbackArtwork: currentCollection.thumbnail || currentCollection.cover || '' })} />
               <span class="track-copy"><strong>{track.title || 'Unknown track'}</strong><small>{track.artists || track.artist || track.subtitle || currentCollection.artist || 'YouTube Music'}</small></span>
             </span>
             <span class="plays-col track-plays">{track.playCount || track.play_count || '—'}</span>

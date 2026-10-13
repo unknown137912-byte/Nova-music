@@ -22,6 +22,8 @@
   isolation: isolate;
   min-width: 840px;
   min-height: 620px;
+  /* The app shell is a fixed viewport; never let focus/scrollIntoView move its grid. */
+  overflow: clip;
   background: #130d0e;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "DM Sans", sans-serif;
   transition: grid-template-columns .24s cubic-bezier(.2,.8,.2,1);
@@ -994,6 +996,7 @@
 #svelte .app-shell .main-content.panel-open { border-right: 0 !important; }
 #svelte .app-shell .right-panel {
   position: absolute;
+  grid-row: 1 / 4;
   z-index: 12;
   top: 48px;
   right: 0;

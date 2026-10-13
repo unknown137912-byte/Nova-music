@@ -4,7 +4,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { Clock, Disc, Heart, LayoutGrid, Music2, Play, Sparkles, UserRound } from 'lucide-svelte';
   import TrackActions from '../lib/TrackActions.svelte';
-  import { artworkUrl, recoverArtwork } from '../lib/artwork';
+  import { artworkFor, recoverArtwork } from '../lib/artwork';
 
   export let accountName = '';
   export let currentTrackId = '';
@@ -287,7 +287,7 @@
           {#each recentTracks.slice(0, 6) as item (item.videoId || item.video_id || item.id || item.title)}
             <div class="recent-card-wrap">
               <button class="recent-card" on:click={() => playItem(item)}>
-                <img src={artworkUrl(item.thumbnail || item.thumbnail_url || '', 1200) || '/placeholder.svg'} alt="" loading="lazy" on:error={(event) => recoverArtwork(event, item)} />
+                <img src={artworkFor(item, 1200)} alt="" loading="lazy" on:error={(event) => recoverArtwork(event, item)} />
                 <span class="recent-copy"><strong>{item.title || item.name || 'Unknown track'}</strong><small>{displaySubtitle(item)}</small></span>
                 <span class="recent-play"><Play size={15} fill="currentColor" /></span>
               </button>
@@ -326,7 +326,7 @@
               <div class="shelf-card-wrap">
                 <button class="shelf-card" on:click={() => openItem(item)}>
                   <span class="shelf-art-wrap">
-                    <img src={artworkUrl(item.thumbnail || item.thumbnail_url || item.cover || '', 1200) || '/placeholder.svg'} alt="" loading="lazy" on:error={(event) => recoverArtwork(event, item)} />
+                    <img src={artworkFor(item, 1200)} alt="" loading="lazy" on:error={(event) => recoverArtwork(event, item)} />
                     <span class="shelf-play"><Play size={17} fill="currentColor" /></span>
                   </span>
                   <span class="shelf-title">{item.title || item.name || 'Untitled'}</span>

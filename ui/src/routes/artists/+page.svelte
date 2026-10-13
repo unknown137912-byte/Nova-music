@@ -2,7 +2,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { Play, Radio, Sparkles } from 'lucide-svelte';
   import TrackActions from '../../lib/TrackActions.svelte';
-  import { artworkUrl, recoverArtwork } from '../../lib/artwork';
+  import { artworkFor, artworkUrl, recoverArtwork } from '../../lib/artwork';
 
   export let artistId = '';
   export let onPlayTrack: (track: any) => void = () => {};
@@ -86,7 +86,7 @@
             <div class="artist-song-row">
               <button class="artist-song-main" on:click={() => playSong(song)} aria-label={`Play ${song.title || 'track'}`}>
                 <span class="artist-song-index">{index + 1}</span>
-                <img src={artworkUrl(song.thumbnail || artist.thumbnail, 1000) || '/placeholder.svg'} alt="" on:error={(event) => recoverArtwork(event, song)} />
+                <img src={artworkFor(song, 1000, artist.thumbnail || '')} alt="" on:error={(event) => recoverArtwork(event, { ...song, fallbackArtwork: artist.thumbnail || '' })} />
                 <span class="artist-song-copy"><strong>{song.title}</strong><small>{song.artists || artist.name}</small></span>
                 <span class="artist-song-play"><Play size={15} fill="currentColor" /></span>
                 <span class="artist-song-duration">{song.duration || ''}</span>

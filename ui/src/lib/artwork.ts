@@ -8,6 +8,7 @@ type ArtworkRecord = {
   trackId?: unknown;
   track_id?: unknown;
   id?: unknown;
+  fallbackArtwork?: unknown;
 };
 
 const YOUTUBE_IMAGE_SIZES = [
@@ -39,15 +40,37 @@ export function artworkUrl(source: unknown, size = 1600): string {
     .replace(/([?&](?:height|h)=)\d+/gi, `$1${size}`);
 }
 
+function youtubeRecordId(record: ArtworkRecord | null | undefined): string {
+  const id = [record?.videoId, record?.video_id, record?.trackId, record?.track_id, record?.id]
+    .map((value) => String(value || '').trim())
+    .find((value) => /^[\w-]{11}$/.test(value));
+  return id || '';
+}
+
+/** Resolve an artwork URL, deriving video art when metadata omitted its thumbnail. */
+export function artworkFor(
+  record: ArtworkRecord | null | undefined,
+  size = 1600,
+  fallbackArtwork: unknown = '',
+): string {
+  const source = [record?.thumbnail, record?.thumbnail_url, record?.cover, record?.banner]
+    .map((value) => String(value || '').trim())
+    .find((value) => value && !/placeholder\.(?:jpg|svg)$/i.test(value));
+  if (source) return artworkUrl(source, size);
+
+  const youtubeId = youtubeRecordId(record);
+  if (youtubeId) return `https://i.ytimg.com/vi/${encodeURIComponent(youtubeId)}/maxresdefault.jpg`;
+
+  const fallback = String(fallbackArtwork || record?.fallbackArtwork || '').trim();
+  return fallback ? artworkUrl(fallback, size) : '/placeholder.svg';
+}
+
 function artworkCandidates(source: string, record: ArtworkRecord | null): string[] {
   const candidates: string[] = [];
-  const sources = [source, record?.thumbnail, record?.thumbnail_url, record?.cover, record?.banner]
+  const sources = [source, record?.thumbnail, record?.thumbnail_url, record?.cover, record?.banner, record?.fallbackArtwork]
     .map((value) => String(value || '').trim())
     .filter(Boolean);
-  const ids = [
-    ...sources.map(youtubeVideoId),
-    String(record?.videoId || record?.video_id || record?.trackId || record?.track_id || record?.id || ''),
-  ].filter((id) => /^[\w-]{11}$/.test(id));
+  const ids = [...sources.map(youtubeVideoId), youtubeRecordId(record)].filter(Boolean);
 
   for (const imageId of [...new Set(ids)]) {
     for (const size of YOUTUBE_IMAGE_SIZES) candidates.push(`https://i.ytimg.com/vi/${encodeURIComponent(imageId)}/${size}`);

@@ -22,7 +22,7 @@
   import ArtistsPage from './routes/artists/+page.svelte';
   import Settings from './routes/settings/+page.svelte';
   import TrackActions from './lib/TrackActions.svelte';
-  import { artworkUrl as highResArtwork, recoverArtwork } from './lib/artwork';
+  import { artworkFor, artworkUrl as highResArtwork, recoverArtwork } from './lib/artwork';
 
   type Tab = 'home' | 'search' | 'library' | 'playlists' | 'artist';
   type NavigationEntry = { tab: Tab; playlistId: string | null; artistId: string; query: string };
@@ -118,10 +118,10 @@
     }
     playbackCollection = {
       title: String(detail.title || ''),
-      thumbnail: String(detail.thumbnail || ''),
+      thumbnail: String(detail.thumbnail || detail.cover || ''),
       items: Array.isArray(detail.items) ? detail.items : [],
     };
-    pageArtwork = String(detail.thumbnail || '');
+    pageArtwork = String(detail.thumbnail || detail.cover || '');
     if (pageArtwork) sampleArtworkPalette(pageArtwork);
   }
 
@@ -379,7 +379,7 @@
         if (track?.id) {
           const sameTrack = nowPlaying?.id === track.id;
           if (!sameTrack) resetLyricsForTrack(String(track.id));
-          if (!sameTrack) sampleArtworkPalette(String(track.thumbnail || ''));
+          if (!sameTrack) sampleArtworkPalette(artworkFor(track, 1600, playbackCollection?.thumbnail || pageArtwork));
           nowPlaying = {
             ...track,
             ...(sameTrack && nowPlaying?.album ? { album: nowPlaying.album } : {}),
@@ -707,15 +707,17 @@
     isPlaying = true;
     playbackPosition = 0;
     playbackDuration = duration || 0;
+    const collectionArtwork = playbackCollection?.thumbnail || playbackCollection?.cover || pageArtwork || '';
     nowPlaying = {
       ...track,
       id: trackId,
       title: track?.title || track?.name || 'Unknown track',
       artist: track?.artist || track?.artists || track?.subtitle || 'YouTube Music',
       thumbnail: track?.thumbnail || track?.thumbnail_url || track?.cover || '',
+      fallbackArtwork: collectionArtwork,
       duration: duration || undefined,
     };
-    sampleArtworkPalette(String(nowPlaying.thumbnail || ''));
+    sampleArtworkPalette(artworkFor(nowPlaying, 1600, collectionArtwork));
     if (sidePanel === 'lyrics' || showNowPlaying) void loadLyrics();
 
     try {
@@ -729,6 +731,8 @@
       if (resolved) nowPlaying = {
         ...nowPlaying,
         ...resolved,
+        thumbnail: resolved?.thumbnail || resolved?.thumbnail_url || nowPlaying.thumbnail,
+        fallbackArtwork: collectionArtwork,
         ...(track?.album ? { album: track.album } : {}),
         ...(track?.albumId || track?.album_id ? { albumId: track.albumId || track.album_id } : {}),
         ...(track?.artistId || track?.artist_id ? { artistId: track.artistId || track.artist_id } : {}),
@@ -939,6 +943,13 @@
     return likedTrackIds.has(id) || track?.liked === true || String(track?.rating || '').toLowerCase() === 'like';
   }
 
+  function recoverNowPlayingArtwork(event: Event) {
+    recoverArtwork(event, nowPlaying ? {
+      ...nowPlaying,
+      fallbackArtwork: playbackCollection?.thumbnail || playbackCollection?.cover || pageArtwork || nowPlaying.fallbackArtwork || '',
+    } : null);
+  }
+
   async function toggleLikeTrack() {
     const trackId = String(nowPlaying?.id || '').trim();
     if (!trackId) return;
@@ -1002,10 +1013,8 @@
   $: queuePreviewItems = playbackCollection?.items?.length && activeImmersiveTrackIndex >= 0
     ? playbackCollection.items.slice(activeImmersiveTrackIndex + 1)
     : queueItems;
-  $: immersiveArtwork = highResArtwork(
-    [nowPlaying?.thumbnail, nowPlaying?.thumbnail_url, playbackCollection?.thumbnail, pageArtwork]
-      .find((source) => source && !/placeholder\.(?:jpg|svg)$/i.test(String(source))) || '/placeholder.svg',
-  );
+  $: currentArtwork = artworkFor(nowPlaying, 1600, playbackCollection?.thumbnail || playbackCollection?.cover || pageArtwork || nowPlaying?.fallbackArtwork || '');
+  $: immersiveArtwork = currentArtwork;
   $: activeDownloadJobs = downloadJobs.filter((job) => ['starting', 'downloading', 'converting'].includes(job.status));
   $: if (activeDownloadJobs.length === 0 && downloadsOpen) downloadsOpen = false;
   $: if ((sidePanel === 'lyrics' || showNowPlaying) && activeLyricIndex >= 0) {
@@ -1025,7 +1034,7 @@
 
 <div class="app-shell theme-nebula" class:compact-interface={appearanceDensity === 'compact'} class:search-expanded={searchPopoverOpen && globalSearchQuery.trim().length >= 2} class:panel-hidden={sidePanel === null} class:sidebar-hidden={sidebarHidden} class:reduced-motion={motionPreference === 'reduced'} class:flat-backdrop={appearanceBackdrop === 'flat'} class:gradient-backdrop={appearanceBackdrop === 'gradient'} style={`--cover-rgb:${coverRgb};--cover-deep-rgb:${coverDeepRgb};--lyrics-size:${lyricsFontSize}px;--ambient-image:url("${immersiveArtwork.replaceAll('"', '%22')}")`}>
   <div class="app-backdrop" aria-hidden="true">
-    {#key immersiveArtwork}<img src={immersiveArtwork || '/placeholder.svg'} alt="" in:fade={{ duration: 520 }} out:fade={{ duration: 360 }} on:error={(event) => recoverArtwork(event, nowPlaying)} />{/key}
+    {#key immersiveArtwork}<img src={immersiveArtwork || '/placeholder.svg'} alt="" in:fade={{ duration: 520 }} out:fade={{ duration: 360 }} on:error={recoverNowPlayingArtwork} />{/key}
   </div>
   <header class="topbar">
     {#if historyIndex > 0 && activeTab !== 'home' && !showNowPlaying}
@@ -1102,7 +1111,7 @@
                   <div class="search-popover-section"><span class="search-popover-label">SONGS</span>
                     {#each quickSearchSongs as item (item.id || item.videoId)}
                       <div class="search-result-row">
-                        <button class="search-result-main" on:click={() => chooseGlobalSearchResult(item, 'song')}><img src={highResArtwork(item.thumbnail || item.thumbnail_url || '', 700) || '/placeholder.svg'} alt="" on:error={(event) => recoverArtwork(event, item)} /><span class="search-result-copy"><strong>{item.title || 'Untitled track'}</strong><small>{item.artist || item.artists || 'YouTube Music'}</small></span><Play size={15} fill="currentColor" /></button>
+                        <button class="search-result-main" on:click={() => chooseGlobalSearchResult(item, 'song')}><img src={artworkFor(item, 900)} alt="" on:error={(event) => recoverArtwork(event, item)} /><span class="search-result-copy"><strong>{item.title || 'Untitled track'}</strong><small>{item.artist || item.artists || 'YouTube Music'}</small></span><Play size={15} fill="currentColor" /></button>
                         <TrackActions track={item} playlists={libraryCollections.playlists} onAction={handleTrackAction} />
                       </div>
                     {/each}
@@ -1193,7 +1202,7 @@
         {#if sidePanel === 'now-playing'}
           <div class="now-playing-panel">
             {#if nowPlaying}
-              <div class="panel-now-art"><img src={highResArtwork(nowPlaying.thumbnail || '') || '/placeholder.svg'} alt="" on:error={(event) => recoverArtwork(event, nowPlaying)} /></div>
+              <div class="panel-now-art"><img src={currentArtwork} alt="" on:error={recoverNowPlayingArtwork} /></div>
               <div class="panel-now-track">
                 <div class="panel-now-copy">
                   <strong>{nowPlaying.title || 'Unknown track'}</strong>
@@ -1206,7 +1215,7 @@
               <div class="panel-album-card">
                 <div class="panel-album-heading"><strong>Playing from</strong><MoreHorizontal size={18} /></div>
                 <button class="panel-album-link" disabled={!nowPlaying.albumId} on:click={() => nowPlaying.albumId && handleOpenPlaylist(nowPlaying.albumId)}>
-                  <img src={highResArtwork(nowPlaying.thumbnail || '') || '/placeholder.svg'} alt="" on:error={(event) => recoverArtwork(event, nowPlaying)} />
+                  <img src={artworkFor(playbackCollection || nowPlaying, 1000, currentArtwork)} alt="" on:error={recoverNowPlayingArtwork} />
                   <span><strong>{nowPlaying.album || 'YouTube Music'}</strong><small>{nowPlaying.album ? 'Album' : 'Current source'}</small></span>
                 </button>
               </div>
@@ -1224,7 +1233,7 @@
             {#if nowPlaying}
               <button class="queue-track current" on:click={openImmersivePlayer}>
                 <span class="queue-number"><span class="playing-bars"><i></i><i></i><i></i></span></span>
-                <img src={highResArtwork(nowPlaying.thumbnail || '') || '/placeholder.svg'} alt="" on:error={(event) => recoverArtwork(event, nowPlaying)} />
+                <img src={currentArtwork} alt="" on:error={recoverNowPlayingArtwork} />
                 <span class="queue-track-copy"><strong>{nowPlaying.title}</strong><small>{nowPlaying.artist}</small></span>
                 <span class="queue-time"><Heart size={13} fill={trackIsLiked(nowPlaying) ? 'currentColor' : 'none'} /></span>
               </button>
@@ -1233,7 +1242,7 @@
             {#each queuePreviewItems as item, index (item.track_id || item.videoId || item.video_id || item.id || index)}
               <button class="queue-track" on:click={() => handlePlayTrack(item)}>
                 <span class="queue-number">{index + 1}</span>
-                <img src={highResArtwork(item.thumbnail_url || item.thumbnail || '') || '/placeholder.svg'} alt="" on:error={(event) => recoverArtwork(event, item)} />
+                <img src={artworkFor(item, 1000, playbackCollection?.thumbnail || playbackCollection?.cover || pageArtwork)} alt="" on:error={(event) => recoverArtwork(event, { ...item, fallbackArtwork: playbackCollection?.thumbnail || playbackCollection?.cover || pageArtwork })} />
                 <span class="queue-track-copy"><strong>{item.title || 'Untitled track'}</strong><small>{item.artist || item.subtitle || 'YouTube Music'}</small></span>
                 <span class="queue-time"><MoreHorizontal size={15} /></span>
               </button>
@@ -1245,7 +1254,7 @@
         {:else}
           <div class="lyrics-content">
             {#if nowPlaying}
-              <div class="lyrics-track-art"><img src={highResArtwork(nowPlaying.thumbnail || '') || '/placeholder.svg'} alt="" on:error={(event) => recoverArtwork(event, nowPlaying)} /></div>
+              <div class="lyrics-track-art"><img src={currentArtwork} alt="" on:error={recoverNowPlayingArtwork} /></div>
               <h2>{nowPlaying.title}</h2>
               <p>{nowPlaying.artist}</p>
               {#if lyricsLoading}
@@ -1275,7 +1284,7 @@
   {#if showNowPlaying && nowPlaying}
     <section class="immersive-player" aria-label="Expanded now playing" in:fade={{ duration: 240 }}>
       <div class="immersive-backdrop" aria-hidden="true">
-        {#key immersiveArtwork}<img src={immersiveArtwork || '/placeholder.svg'} alt="" in:fade={{ duration: 500 }} out:fade={{ duration: 360 }} on:error={(event) => recoverArtwork(event, nowPlaying)} />{/key}
+        {#key immersiveArtwork}<img src={immersiveArtwork || '/placeholder.svg'} alt="" in:fade={{ duration: 500 }} out:fade={{ duration: 360 }} on:error={recoverNowPlayingArtwork} />{/key}
       </div>
       <div class="immersive-glass-wash"></div>
       <header class="immersive-header">
@@ -1287,7 +1296,7 @@
       <div class="immersive-content">
         <section class="immersive-playlist" aria-label="Playlist tracks">
           <div class="immersive-playlist-summary">
-            <img src={highResArtwork(playbackCollection?.thumbnail || nowPlaying.thumbnail || '') || '/placeholder.svg'} alt="" on:error={(event) => recoverArtwork(event, playbackCollection || nowPlaying)} />
+            <img src={artworkFor(playbackCollection || nowPlaying, 1600, currentArtwork)} alt="" on:error={recoverNowPlayingArtwork} />
             <div><span>PLAYING FROM</span><h1>{playbackCollection?.title || nowPlaying.album || 'Up Next'}</h1><p>{playbackCollection?.items?.length || immersiveTracks.length} songs · {nowPlaying.artist || 'YouTube Music'}</p></div>
           </div>
           <div class="immersive-playlist-tools">
@@ -1368,7 +1377,7 @@
     <div class="player-track">
       {#if nowPlaying}
         <button class="player-art-button" on:click={openImmersivePlayer} aria-label="Open now playing">
-          <img src={highResArtwork(nowPlaying.thumbnail || '') || '/placeholder.svg'} alt="" on:error={(event) => recoverArtwork(event, nowPlaying)} />
+          <img src={currentArtwork} alt="" on:error={recoverNowPlayingArtwork} />
         </button>
         <div class="player-track-copy">
           <strong title={nowPlaying.title}>{nowPlaying.title || 'Unknown track'}</strong>
