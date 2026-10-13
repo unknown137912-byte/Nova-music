@@ -95,17 +95,6 @@ function signOut() {
   padding: var(--space-8);
 }
 
-.auth-container.signed-in {
-  text-align: center;
-}
-
-.auth-container.signed-out {
-  background: var(--bg-secondary);
-  border-radius: var(--radius-lg);
-  padding: var(--space-6);
-  border: 1px solid var(--border-primary);
-}
-
 .auth-container h2 {
   font-size: var(--text-2xl);
   margin-bottom: var(--space-4);

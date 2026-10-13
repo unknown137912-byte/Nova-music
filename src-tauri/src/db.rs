@@ -512,6 +512,15 @@ impl Db {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    pub async fn clear_local_history(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        conn.execute("DELETE FROM local_history", [])?;
+        Ok(())
+    }
+
     pub async fn get_top_listened_track(
         &self,
     ) -> std::result::Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
@@ -889,6 +898,38 @@ mod tests {
         assert_eq!(history[0]["playCount"], 2);
         assert_eq!(history[0]["title"], "Updated title");
         assert_eq!(history[0]["duration"], 135.0);
+
+        drop(db);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+    }
+
+    #[tokio::test]
+    async fn clearing_local_history_preserves_other_library_data() {
+        let path = temporary_db_path("clear-history");
+        let db = Db::open(&path).expect("open test database");
+        db.record_local_play("track-1", "Song", "Artist", "cover", 120.0)
+            .await
+            .expect("record local play");
+        db.create_local_playlist("Keep this playlist")
+            .await
+            .expect("create playlist");
+
+        db.clear_local_history().await.expect("clear local history");
+
+        assert!(db
+            .get_local_history(10)
+            .await
+            .expect("read cleared history")
+            .is_empty());
+        assert_eq!(
+            db.get_local_playlists()
+                .await
+                .expect("read playlists")
+                .len(),
+            1
+        );
 
         drop(db);
         let _ = std::fs::remove_file(&path);

@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import { Clock3, ListMusic, Music2, Play, Search, Sparkles, Plus, Trash2 } from 'lucide-svelte';
+  import { Clock3, ListMusic, Music2, Play, Search, Sparkles, Plus, Trash2, Shuffle } from 'lucide-svelte';
   import TrackActions from '../../lib/TrackActions.svelte';
+  import { artworkUrl, recoverArtwork } from '../../lib/artwork';
 
   export let activePlaylistId: string | null = null;
   export let onPlayTrack: (track: any) => void = () => {};
@@ -16,7 +17,7 @@
   let libraryPlaylists: any[] = [];
   let libraryAlbums: any[] = [];
   let libraryArtists: any[] = [];
-  let category = 'Playlists';
+  export let category = 'Playlists';
   let filterText = '';
   let requestedId: string | null | undefined = undefined;
   let requestVersion = 0;
@@ -29,10 +30,6 @@
     let hash = 2166136261;
     for (let index = 0; index < source.length; index += 1) hash = Math.imul(hash ^ source.charCodeAt(index), 16777619);
     return `hsl(${(hash >>> 0) % 360} 62% 32%)`;
-  }
-
-  function artworkUrl(source: string): string {
-    return String(source || '').replace(/(?:=|-)w\d+-h\d+/g, (match) => match[0] === '=' ? '=w1200-h1200' : '-w1200-h1200');
   }
 
   onMount(() => {
@@ -145,6 +142,22 @@
   $: visibleItems = (category === 'Albums' ? libraryAlbums : category === 'Artists' ? libraryArtists : libraryPlaylists)
     .filter((item) => !filterText || String(item.title || item.name || '').toLowerCase().includes(filterText.toLowerCase()));
   $: totalSeconds = collectionItems.reduce((total: number, item: any) => total + durationInSeconds(item.duration), 0);
+  let publishedContextKey = '';
+  $: {
+    if (currentCollection && activePlaylistId) {
+      const artwork = currentCollection.thumbnail || currentCollection.cover || '';
+      const key = `${activePlaylistId}:${artwork}:${collectionItems.length}`;
+      if (key !== publishedContextKey) {
+        publishedContextKey = key;
+        window.dispatchEvent(new CustomEvent('nova-playlist-context', {
+          detail: { title: currentCollection.title || '', thumbnail: artwork, items: collectionItems },
+        }));
+      }
+    } else if (!activePlaylistId && publishedContextKey) {
+      publishedContextKey = '';
+      window.dispatchEvent(new CustomEvent('nova-playlist-context', { detail: { title: '', thumbnail: '', items: [] } }));
+    }
+  }
 
   function durationInSeconds(value: any): number {
     if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -198,6 +211,12 @@
     if (collectionItems.length) playSong(collectionItems[0]);
   }
 
+  function shuffleCollection() {
+    if (!collectionItems.length) return;
+    window.dispatchEvent(new CustomEvent('nova-shuffle-request'));
+    playSong(collectionItems[Math.floor(Math.random() * collectionItems.length)]);
+  }
+
   async function createPlaylist(event: SubmitEvent) {
     event.preventDefault();
     const title = newPlaylistTitle.trim();
@@ -241,7 +260,7 @@
   {:else if currentCollection}
     <section class="collection-hero" style={`--cover:url("${currentCollection.thumbnail || currentCollection.cover || ''}")`}>
       <div class="collection-hero-content">
-        <div class="collection-cover"><img src={currentCover || '/placeholder.jpg'} alt="" /></div>
+        <div class="collection-cover"><img src={currentCover || '/placeholder.svg'} alt="" on:error={(event) => recoverArtwork(event, currentCollection)} /></div>
         <div class="collection-info">
           <span class="collection-kind">{isLikedCollection ? 'Your music' : isAlbum ? 'Album' : 'Playlist'}</span>
           <h1>{currentCollection.title || 'Untitled collection'}</h1>
@@ -253,6 +272,7 @@
           </div>
           <div class="collection-actions">
             <button class="play-collection" on:click={playFirst} disabled={!collectionItems.length}><Play size={18} fill="currentColor" /> Play</button>
+            <button class="shuffle-collection" on:click={shuffleCollection} disabled={!collectionItems.length}><Shuffle size={15} /> Shuffle</button>
             {#if isLocalPlaylist}
               <button class="delete-playlist" on:click={deletePlaylist}><Trash2 size={15} /> {confirmingDelete ? 'Confirm delete' : 'Delete playlist'}</button>
               {#if confirmingDelete}<button class="cancel-delete" on:click={() => confirmingDelete = false}>Cancel</button>{/if}
@@ -272,7 +292,7 @@
           <button class="track-row-main" on:click={() => playSong(track)} aria-label={`Play ${track.title || 'track'}`}>
             <span class="index-col track-index"><span class="row-number">{index + 1}</span><span class="row-play"><Play size={15} fill="currentColor" /></span></span>
             <span class="title-col track-title-cell">
-              <img src={track.thumbnail || currentCollection.thumbnail || currentCollection.cover || '/placeholder.jpg'} alt="" />
+              <img src={artworkUrl(track.thumbnail || currentCollection.thumbnail || currentCollection.cover || '') || '/placeholder.svg'} alt="" on:error={(event) => recoverArtwork(event, track)} />
               <span class="track-copy"><strong>{track.title || 'Unknown track'}</strong><small>{track.artists || track.artist || track.subtitle || currentCollection.artist || 'YouTube Music'}</small></span>
             </span>
             <span class="plays-col track-plays">{track.playCount || track.play_count || '—'}</span>
@@ -307,7 +327,7 @@
         <div class="collection-grid">
           {#each visibleItems as item (item.id || item.playlistId || item.browseId || item.title)}
             <button class="collection-card" on:click={() => openItem(item)}>
-              <span class="collection-card-art"><img src={item.thumbnail || item.cover || item.thumbnail_url || '/placeholder.jpg'} alt="" /><span class="card-play"><Play size={17} fill="currentColor" /></span></span>
+              <span class="collection-card-art"><img src={artworkUrl(item.thumbnail || item.cover || item.thumbnail_url || '') || '/placeholder.svg'} alt="" on:error={(event) => recoverArtwork(event, item)} /><span class="card-play"><Play size={17} fill="currentColor" /></span></span>
               <strong>{item.title || item.name || 'Untitled'}</strong>
               <small>{item.subtitle || item.artist || (category === 'Artists' ? 'Artist' : category.slice(0, -1))}</small>
             </button>

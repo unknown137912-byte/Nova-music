@@ -1,6 +1,7 @@
 <script lang="ts">
 import { onMount } from 'svelte';
 import { invoke } from '@tauri-apps/api/core';
+import { artworkUrl, recoverArtwork } from '../../lib/artwork';
 
 let loading = true;
 let playlist = null;
@@ -18,7 +19,7 @@ onMount(async () => {
       id: '1',
       title: 'Sample Playlist',
       description: 'A sample playlist for testing',
-      thumbnail: '/placeholder.jpg',
+      thumbnail: '/placeholder.svg',
       trackCount: 10,
       tracks: [
         { id: '1', title: 'Track 1', artist: 'Artist 1', duration: 180 },
@@ -55,7 +56,7 @@ function formatDuration(seconds) {
   {:else if playlist}
     <header class="playlist-header">
       <div class="playlist-thumbnail">
-        <img src={playlist.thumbnail || '/placeholder.jpg'} alt={playlist.title} />
+        <img src={artworkUrl(playlist.thumbnail, 1400) || '/placeholder.svg'} alt={playlist.title} on:error={(event) => recoverArtwork(event, playlist)} />
       </div>
       <div class="playlist-info">
         <h1>{playlist.title}</h1>
@@ -78,7 +79,7 @@ function formatDuration(seconds) {
       <h2>Tracks</h2>
       <div class="tracks-list">
         {#each playlist.tracks as track, index (track.videoId || track.video_id || track.id)}
-          <div class="track-item" on:click={() => invoke('play_track', { trackId: track.videoId || track.video_id || track.id })}>
+          <div class="track-item" role="button" tabindex="0" on:click={() => invoke('play_track', { trackId: track.videoId || track.video_id || track.id })} on:keydown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); void invoke('play_track', { trackId: track.videoId || track.video_id || track.id }); } }}>
             <div class="track-number">{index + 1}</div>
             <div class="track-info">
               <h4>{track.title}</h4>

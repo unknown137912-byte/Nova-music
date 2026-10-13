@@ -1025,15 +1025,29 @@ pub(crate) fn duration_from_runs(runs: Option<&Vec<Value>>) -> Option<String> {
     split_subtitle(runs).2
 }
 
-/// Deepest/last thumbnail URL under this node (highest resolution).
+/// Highest-resolution thumbnail URL under this node.
 pub(crate) fn last_thumbnail(node: &Value) -> Option<String> {
-    // Find any `thumbnails: [ { url }, ... ]` array and take the last url.
+    // YouTube normally orders thumbnails from small to large, but some renderers do not. Prefer
+    // explicit dimensions when present, and preserve the historical last-entry fallback for
+    // response shapes that omit them.
     fn walk(v: &Value) -> Option<String> {
         match v {
             Value::Object(map) => {
                 if let Some(arr) = map.get("thumbnails").and_then(Value::as_array) {
-                    if let Some(url) = arr.last().and_then(|t| t.get("url")).and_then(Value::as_str)
-                    {
+                    let largest = arr
+                        .iter()
+                        .filter_map(|thumbnail| {
+                            let url = thumbnail.get("url")?.as_str()?;
+                            let width = thumbnail.get("width")?.as_u64()?;
+                            let height = thumbnail.get("height")?.as_u64()?;
+                            Some((width.saturating_mul(height), url))
+                        })
+                        .max_by_key(|(area, _)| *area)
+                        .map(|(_, url)| url.to_owned());
+                    if largest.is_some() {
+                        return largest;
+                    }
+                    if let Some(url) = arr.last().and_then(|t| t.get("url")).and_then(Value::as_str) {
                         return Some(url.to_owned());
                     }
                 }
@@ -1117,6 +1131,25 @@ pub(crate) fn find_first_str(root: &Value, key: &str) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn highest_resolution_thumbnail_uses_dimensions_not_array_order() {
+        let node = json!({
+            "thumbnail": { "thumbnails": [
+                { "url": "https://images.invalid/large.jpg", "width": 1200, "height": 1200 },
+                { "url": "https://images.invalid/small.jpg", "width": 120, "height": 120 }
+            ] }
+        });
+
+        assert_eq!(last_thumbnail(&node).as_deref(), Some("https://images.invalid/large.jpg"));
+    }
+
+    #[test]
+    fn highest_resolution_thumbnail_keeps_last_entry_when_dimensions_are_missing() {
+        let node = json!({ "thumbnails": [{ "url": "small.jpg" }, { "url": "large.jpg" }] });
+
+        assert_eq!(last_thumbnail(&node).as_deref(), Some("large.jpg"));
+    }
 
     // The whole "hide music videos" feature is this predicate, and the way it fails is silent: a
     // wrong JSON path reads `None` everywhere, the filter quietly becomes a no-op, and the setting

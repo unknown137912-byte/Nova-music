@@ -2,6 +2,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { Play, Radio, Sparkles } from 'lucide-svelte';
   import TrackActions from '../../lib/TrackActions.svelte';
+  import { artworkUrl, recoverArtwork } from '../../lib/artwork';
 
   export let artistId = '';
   export let onPlayTrack: (track: any) => void = () => {};
@@ -20,8 +21,15 @@
     error = '';
     try {
       artist = await invoke('get_artist', { artistId: id });
+      const artwork = artist?.banner || artist?.thumbnail || '';
+      window.dispatchEvent(new CustomEvent('nova-page-artwork', { detail: artwork }));
+      window.dispatchEvent(new CustomEvent('nova-playlist-context', {
+        detail: { title: artist?.name || 'Artist radio', thumbnail: artwork, items: artist?.topSongs || [] },
+      }));
     } catch (reason: any) {
       artist = null;
+      window.dispatchEvent(new CustomEvent('nova-page-artwork', { detail: '' }));
+      window.dispatchEvent(new CustomEvent('nova-playlist-context', { detail: { title: '', thumbnail: '', items: [] } }));
       error = typeof reason === 'string' ? reason : (reason?.message || 'Could not load this artist.');
     } finally {
       loading = false;
@@ -46,6 +54,7 @@
       duration: song.duration,
     });
   }
+
 </script>
 
 <div class="artist-page">
@@ -55,7 +64,7 @@
     <div class="artist-state"><Sparkles size={24} /><h2>Artist unavailable</h2><p>{error}</p><button on:click={() => loadArtist(artistId)}>Try again</button></div>
   {:else if artist}
     <header class="artist-hero">
-      {#if artist.thumbnail}<img class="artist-banner" src={artist.thumbnail} alt="" />{/if}
+      {#if artist.banner || artist.thumbnail}<img class="artist-banner" src={artworkUrl(artist.banner || artist.thumbnail, 1800)} alt="" on:error={(event) => recoverArtwork(event, artist)} />{/if}
       <div class="artist-hero-shade"></div>
       <div class="artist-hero-copy">
         <span>ARTIST</span>
@@ -77,7 +86,7 @@
             <div class="artist-song-row">
               <button class="artist-song-main" on:click={() => playSong(song)} aria-label={`Play ${song.title || 'track'}`}>
                 <span class="artist-song-index">{index + 1}</span>
-                <img src={song.thumbnail || artist.thumbnail || '/placeholder.jpg'} alt="" />
+                <img src={artworkUrl(song.thumbnail || artist.thumbnail, 1000) || '/placeholder.svg'} alt="" on:error={(event) => recoverArtwork(event, song)} />
                 <span class="artist-song-copy"><strong>{song.title}</strong><small>{song.artists || artist.name}</small></span>
                 <span class="artist-song-play"><Play size={15} fill="currentColor" /></span>
                 <span class="artist-song-duration">{song.duration || ''}</span>
@@ -96,7 +105,7 @@
           <div class="artist-cards">
             {#each section.items as item (item.id || item.title)}
               <button class="artist-card" on:click={() => item.kind === 'artist' ? onOpenArtist(item.id) : onOpenPlaylist(item.id)}>
-                <img src={item.thumbnail || '/placeholder.jpg'} alt="" />
+                <img src={artworkUrl(item.thumbnail, 1000) || '/placeholder.svg'} alt="" on:error={(event) => recoverArtwork(event, item)} />
                 <strong>{item.title}</strong><small>{item.subtitle || item.kind}</small>
               </button>
             {/each}
@@ -110,8 +119,8 @@
 <style>
   .artist-page { min-height: 100%; padding: 0 0 68px; color: #f5f6f6; background: #080909; }
   .artist-hero { min-height: 320px; position: relative; display: flex; align-items: end; overflow: hidden; padding: 48px clamp(26px, 5vw, 64px) 34px; background: #171b19; }
-  .artist-banner { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .55; filter: blur(2px) saturate(.8); }
-  .artist-hero-shade { position: absolute; inset: 0; background: linear-gradient(90deg, #080909ef 0%, #080909a8 50%, #08090942), linear-gradient(0deg, #080909 0%, transparent 80%); }
+  .artist-banner { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .76; filter: saturate(.94); }
+  .artist-hero-shade { position: absolute; inset: 0; background: linear-gradient(90deg, #080909d9 0%, #08090986 46%, #08090922), linear-gradient(0deg, #080909 0%, transparent 78%); }
   .artist-hero-copy { position: relative; z-index: 1; max-width: 760px; }
   .artist-hero-copy > span { color: #c9cecb; font-size: 10px; font-weight: 800; letter-spacing: .15em; }
   .artist-hero h1 { margin: 8px 0; font-size: clamp(34px, 6vw, 58px); line-height: 1; letter-spacing: -.045em; }

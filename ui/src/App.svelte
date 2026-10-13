@@ -7,10 +7,12 @@
   import { exit } from '@tauri-apps/plugin-process';
   import { fade, fly } from 'svelte/transition';
   import {
-    Home as HomeIcon, Search, Library, Settings2, ChevronRight,
-    RotateCw, UserRound, ListMusic, Mic2, Heart, Play, Pause, SkipBack,
-    SkipForward, Volume2, VolumeX, PanelRight, Download, MoreHorizontal,
-    Plus, Music2, Sparkles, X, ListEnd, ChevronDown, Maximize2, Minimize2,
+    Home as HomeIcon, Search, ChevronRight, ChevronLeft,
+    UserRound, ListMusic, Mic2, Heart, Play, Pause, SkipBack,
+    SkipForward, Volume2, VolumeX, PanelRight, Download, MoreHorizontal, Shuffle, Repeat2,
+    Plus, Music2, Sparkles, X, ChevronDown, Maximize2, Minimize2, ArrowDownToLine,
+    LayoutGrid, Radio, CalendarDays, Pin, Clock3, Disc, Clapperboard, Podcast, Star, Settings2,
+    PanelLeftClose, PanelLeftOpen,
   } from 'lucide-svelte';
 
   import Home from './routes/+page.svelte';
@@ -20,6 +22,7 @@
   import ArtistsPage from './routes/artists/+page.svelte';
   import Settings from './routes/settings/+page.svelte';
   import TrackActions from './lib/TrackActions.svelte';
+  import { artworkUrl as highResArtwork, recoverArtwork } from './lib/artwork';
 
   type Tab = 'home' | 'search' | 'library' | 'playlists' | 'artist';
   type NavigationEntry = { tab: Tab; playlistId: string | null; artistId: string; query: string };
@@ -30,11 +33,9 @@
   let activeArtistId = '';
   let historyStack: NavigationEntry[] = [{ tab: 'home', playlistId: null, artistId: '', query: '' }];
   let historyIndex = 0;
-  let headerCompact = false;
-  let lastMainScrollTop = 0;
   let lastTrackpadNavigationAt = 0;
-  let librarySidebarOpen = true;
   let settingsOpen = false;
+  let sidebarHidden = false;
   let showNowPlaying = false;
   let sidePanel: SidePanel = null;
   let nowPlaying: any = null;
@@ -48,13 +49,16 @@
   let libraryCollections: Record<string, any[]> = { playlists: [], albums: [], artists: [] };
   let likedTrackIds = new Set<string>();
   let downloadJobs: any[] = [];
+  let activeDownloadJobs: any[] = [];
   let downloadsOpen = false;
   let appearanceBackdrop = 'artwork';
   let motionPreference = 'full';
+  let appearanceDensity = 'comfortable';
+  let lyricsFontSize = 19;
   let libraryCategory = 'playlists';
+  let playlistCategory = 'Playlists';
   let queueItems: any[] = [];
   let accountName = '';
-  let accountEmail = '';
   let accountSignedIn = false;
   let appNotice = '';
   let appNoticeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -79,6 +83,10 @@
   let lastScrolledLyric = '';
   let coverRgb = '244 107 130';
   let coverDeepRgb = '30 17 30';
+  let pageArtwork = '';
+  let playbackCollection: any = null;
+  let shuffleMode = false;
+  let repeatMode = 0;
 
   function fallbackArtworkPalette(source: string) {
     let hash = 2166136261;
@@ -100,6 +108,21 @@
     const [r, g, b] = channels.map((channel) => Math.round((channel + match) * 255));
     coverRgb = `${r} ${g} ${b}`;
     coverDeepRgb = `${Math.round(r * .2 + 7)} ${Math.round(g * .2 + 8)} ${Math.round(b * .22 + 10)}`;
+  }
+
+  function updatePlaylistContext(detail: any) {
+    if (!detail || (!detail.title && !detail?.items?.length)) {
+      playbackCollection = null;
+      pageArtwork = '';
+      return;
+    }
+    playbackCollection = {
+      title: String(detail.title || ''),
+      thumbnail: String(detail.thumbnail || ''),
+      items: Array.isArray(detail.items) ? detail.items : [],
+    };
+    pageArtwork = String(detail.thumbnail || '');
+    if (pageArtwork) sampleArtworkPalette(pageArtwork);
   }
 
   function sampleArtworkPalette(source: string) {
@@ -149,9 +172,17 @@
     let stopCloseRequest: (() => void) | undefined;
     let stopDownloadUpdates: (() => void) | undefined;
     const refreshLikedTracks = () => void loadLikedTracks();
+    const requestShuffle = () => { shuffleMode = true; };
+    const handlePlaylistContext = (event: Event) => updatePlaylistContext((event as CustomEvent).detail);
+    const handlePageArtwork = (event: Event) => {
+      pageArtwork = String((event as CustomEvent<string>).detail || '');
+      if (pageArtwork) sampleArtworkPalette(pageArtwork);
+    };
     window.addEventListener('nova-liked-changed', refreshLikedTracks);
+    window.addEventListener('nova-shuffle-request', requestShuffle);
     const openHistory = () => navigate('library');
     const openSettingsFromPage = () => openSettings();
+    const openLibraryFromSettings = () => openLibraryCategory('Playlists');
     const refreshAccountLibrary = () => void loadAccountAndLibrary();
     const closeSearchOnOutsideClick = (event: MouseEvent) => {
       const target = event.target as HTMLElement | null;
@@ -159,6 +190,9 @@
       if (!target?.closest('.downloads-wrap')) downloadsOpen = false;
     };
     window.addEventListener('nova-open-history', openHistory);
+    window.addEventListener('nova-open-library', openLibraryFromSettings);
+    window.addEventListener('nova-playlist-context', handlePlaylistContext);
+    window.addEventListener('nova-page-artwork', handlePageArtwork);
     window.addEventListener('nova-open-settings', openSettingsFromPage);
     window.addEventListener('nova-local-playlists-changed', refreshAccountLibrary);
     window.addEventListener('pointerdown', closeSearchOnOutsideClick);
@@ -168,6 +202,11 @@
     const handleAutoPlayChange = (event: Event) => {
       autoPlayNext = (event as CustomEvent<boolean>).detail;
     };
+    const handlePlaybackSettingsChange = (event: Event) => {
+      const detail = (event as CustomEvent<{ repeatMode?: number; shuffleMode?: boolean }>).detail;
+      if (typeof detail?.repeatMode === 'number') repeatMode = detail.repeatMode;
+      if (typeof detail?.shuffleMode === 'boolean') shuffleMode = detail.shuffleMode;
+    };
     const applyAppearanceSetting = (event: Event) => {
       const detail = (event as CustomEvent<{ key: string; value: string }>).detail;
       if (!detail) return;
@@ -175,10 +214,24 @@
       if (detail.key === 'accent_color') shell?.style.setProperty('--user-accent', detail.value);
       if (detail.key === 'appearance_backdrop') appearanceBackdrop = detail.value;
       if (detail.key === 'motion_preference') motionPreference = detail.value;
+      if (detail.key === 'cosmic_theme') {
+        shell?.classList.remove('theme-nebula', 'theme-cyber', 'theme-deepspace');
+        if (['nebula', 'cyber', 'deepspace'].includes(detail.value)) shell?.classList.add(`theme-${detail.value}`);
+      }
+      if (detail.key === 'appearance_density') {
+        appearanceDensity = detail.value;
+        shell?.classList.toggle('compact-interface', detail.value === 'compact');
+      }
+      if (detail.key === 'lyrics_font_size') {
+        lyricsFontSize = Math.max(14, Math.min(28, Number(detail.value) || 19));
+        shell?.style.setProperty('--lyrics-size', `${lyricsFontSize}px`);
+      }
+      if (detail.key === 'sidebar_visible') sidebarHidden = detail.value !== 'true';
     };
     window.addEventListener('nova-close-to-background-changed', handleCloseSettingChange);
     window.addEventListener('nova-autoplay-changed', handleAutoPlayChange);
     window.addEventListener('nova-appearance-changed', applyAppearanceSetting);
+    window.addEventListener('nova-playback-settings-changed', handlePlaybackSettingsChange);
 
     listen('playback-started', async () => {
       playbackError = null;
@@ -189,6 +242,10 @@
           invoke('get_settings'), invoke('get_now_playing'),
         ]);
         const trackId = String(track?.id || '');
+        if (settings?.auto_open_lyrics === 'true' && !showNowPlaying) {
+          sidePanel = 'lyrics';
+          window.setTimeout(() => void loadLyrics(), 80);
+        }
         if (settings?.song_notifications === 'true' && trackId && trackId !== lastNotifiedTrackId) {
           lastNotifiedTrackId = trackId;
           await invoke('show_song_notification', {
@@ -225,6 +282,25 @@
 
     listen('playback-ended', async () => {
       try {
+        if (repeatMode === 1 && nowPlaying) {
+          await handlePlayTrack(nowPlaying);
+          return;
+        }
+        const collection = playbackCollection?.items || [];
+        if (collection.length) {
+          const currentIndex = activeImmersiveTrackIndex;
+          let nextIndex = currentIndex + 1;
+          if (shuffleMode && collection.length > 1) {
+            do { nextIndex = Math.floor(Math.random() * collection.length); } while (nextIndex === currentIndex);
+          } else if (nextIndex >= collection.length && repeatMode === 2) {
+            nextIndex = 0;
+          }
+          if (nextIndex >= 0 && nextIndex < collection.length) {
+            await handlePlayTrack(collection[nextIndex]);
+            await loadQueue();
+            return;
+          }
+        }
         let next: any = await invoke('dequeue_next_track');
         if (!next && autoPlayNext) next = await invoke('get_autoplay_track');
         if (next && !disposed) {
@@ -246,7 +322,6 @@
         if (disposed) return;
         accountSignedIn = Boolean(account?.is_logged_in);
         accountName = account?.name || account?.email || '';
-        accountEmail = account?.email || '';
         libraryCollections = {
           playlists: (Array.isArray(library) ? library : (library?.playlists || []))
             .filter((item: any) => !['LM', 'VLLM'].includes(String(item?.id || item?.browseId || item?.browse_id || ''))
@@ -270,6 +345,8 @@
       if (!disposed) {
         closeToBackgroundEnabled = settings?.close_to_tray === 'true';
         autoPlayNext = settings?.auto_play_next !== 'false';
+        shuffleMode = settings?.shuffle_mode === 'true';
+        repeatMode = Math.max(0, Math.min(2, Number(settings?.repeat_mode || 0)));
         const theme = String(settings?.cosmic_theme || 'nebula');
         const shell = document.querySelector<HTMLElement>('.app-shell');
         shell?.classList.remove('theme-nebula', 'theme-cyber', 'theme-deepspace');
@@ -277,6 +354,19 @@
         shell?.style.setProperty('--user-accent', settings?.accent_color || '');
         appearanceBackdrop = settings?.appearance_backdrop || 'artwork';
         motionPreference = settings?.motion_preference || 'full';
+        appearanceDensity = settings?.appearance_density || 'comfortable';
+        shell?.classList.toggle('compact-interface', appearanceDensity === 'compact');
+        lyricsFontSize = Math.max(14, Math.min(28, Number(settings?.lyrics_font_size || 19)));
+        shell?.style.setProperty('--lyrics-size', `${lyricsFontSize}px`);
+        if (settings?.sidebar_visible === 'false') sidebarHidden = true;
+        const startPage = settings?.start_page;
+        if (startPage === 'home' || startPage === 'library' || startPage === 'search') {
+          activeTab = startPage;
+          activePlaylistId = null;
+          activeArtistId = '';
+          historyStack = [{ tab: startPage, playlistId: null, artistId: '', query: '' }];
+          historyIndex = 0;
+        }
       }
     }).catch(() => {});
 
@@ -315,6 +405,7 @@
 
     loadAccountAndLibrary();
     loadLikedTracks();
+    void loadQueue();
     listen<any>('download-updated', ({ payload }) => {
       if (!payload?.id) return;
       downloadJobs = [payload, ...downloadJobs.filter((job) => job.id !== payload.id)].slice(0, 30);
@@ -333,19 +424,29 @@
       stopCloseRequest?.();
       stopDownloadUpdates?.();
       window.removeEventListener('nova-liked-changed', refreshLikedTracks);
+      window.removeEventListener('nova-shuffle-request', requestShuffle);
       window.removeEventListener('nova-open-history', openHistory);
+      window.removeEventListener('nova-open-library', openLibraryFromSettings);
+      window.removeEventListener('nova-playlist-context', handlePlaylistContext);
+      window.removeEventListener('nova-page-artwork', handlePageArtwork);
       window.removeEventListener('nova-open-settings', openSettingsFromPage);
       window.removeEventListener('nova-local-playlists-changed', refreshAccountLibrary);
       window.removeEventListener('pointerdown', closeSearchOnOutsideClick);
       window.removeEventListener('nova-close-to-background-changed', handleCloseSettingChange);
       window.removeEventListener('nova-autoplay-changed', handleAutoPlayChange);
       window.removeEventListener('nova-appearance-changed', applyAppearanceSetting);
+      window.removeEventListener('nova-playback-settings-changed', handlePlaybackSettingsChange);
       if (globalSearchTimer) clearTimeout(globalSearchTimer);
     };
   });
 
   function navigate(tab: Tab) {
     searchPopoverOpen = false;
+    if (tab === 'home' || tab === 'search') sidePanel = null;
+    if (tab !== 'playlists' || !activePlaylistId) {
+      playbackCollection = null;
+      pageArtwork = '';
+    }
     const destination: NavigationEntry = {
       tab,
       playlistId: tab === 'playlists' ? activePlaylistId : null,
@@ -364,6 +465,19 @@
     if (showNowPlaying) void closeImmersivePlayer();
   }
 
+  function openSearchFor(query = '') {
+    globalSearchQuery = query;
+    navigate('search');
+    if (!query) setTimeout(() => globalSearchInput?.focus(), 0);
+  }
+
+  function openLibraryCategory(category: 'Playlists' | 'Albums' | 'Artists') {
+    libraryCategory = category.toLowerCase();
+    playlistCategory = category;
+    activePlaylistId = null;
+    navigate('playlists');
+  }
+
   function navigateHistory(direction: number) {
     const target = historyIndex + direction;
     if (target < 0 || target >= historyStack.length) return;
@@ -373,15 +487,9 @@
     activePlaylistId = destination.playlistId;
     activeArtistId = destination.artistId;
     globalSearchQuery = destination.query;
+    if (destination.tab === 'home' || destination.tab === 'search') sidePanel = null;
+    else if (sidePanel === null && (destination.tab === 'playlists' && destination.playlistId || destination.tab === 'artist' && destination.artistId)) sidePanel = 'queue';
     if (showNowPlaying) void closeImmersivePlayer();
-  }
-
-  function handleMainScroll(event: Event) {
-    const scrollTop = (event.currentTarget as HTMLElement).scrollTop;
-    const delta = scrollTop - lastMainScrollTop;
-    if (scrollTop <= 16 || delta < -1) headerCompact = false;
-    else if (scrollTop > 26 && delta > 2) headerCompact = true;
-    lastMainScrollTop = scrollTop;
   }
 
   function handleTrackpadNavigation(event: WheelEvent) {
@@ -396,8 +504,21 @@
     navigateHistory(event.deltaX > 0 ? -1 : 1);
   }
 
+  async function startWindowDrag(event: MouseEvent) {
+    if (event.button !== 0 || event.target !== event.currentTarget) return;
+    try { await getCurrentWindow().startDragging(); } catch (_) { /* Web preview has no native window to drag. */ }
+  }
+
   function openSettings() {
     settingsOpen = true;
+  }
+
+  function openSongActionsOnDoubleClick(event: MouseEvent) {
+    const target = event.target;
+    if (!(target instanceof Element) || target.closest('.track-actions, input, textarea, [contenteditable="true"]')) return;
+    const row = target.closest('.search-result-row, .recent-card-wrap, .shelf-card-wrap, .history-row-wrap, .song-row, .track-row, .artist-song-row, .immersive-song-row-wrap, .player-track');
+    const actions = row?.querySelector('.track-actions');
+    actions?.dispatchEvent(new Event('nova-track-actions-open'));
   }
 
   function showNotice(message: string) {
@@ -625,6 +746,7 @@
   function handleOpenPlaylist(id: string) {
     if (!id) return;
     activePlaylistId = id;
+    sidePanel = 'queue';
     navigate('playlists');
   }
 
@@ -638,6 +760,7 @@
   function handleOpenArtist(id: string) {
     if (!id) return;
     activeArtistId = id;
+    sidePanel = 'queue';
     navigate('artist');
   }
 
@@ -651,8 +774,32 @@
     }
   }
 
+  function toggleShuffleMode() {
+    shuffleMode = !shuffleMode;
+    void invoke('update_settings', { key: 'shuffle_mode', value: String(shuffleMode) })
+      .catch((error: any) => showNotice(error?.message || 'Could not save shuffle preference'));
+  }
+
+  function cycleRepeatMode() {
+    repeatMode = (repeatMode + 1) % 3;
+    void invoke('update_settings', { key: 'repeat_mode', value: String(repeatMode) })
+      .catch((error: any) => showNotice(error?.message || 'Could not save repeat preference'));
+  }
+
   async function skipTrack() {
     try {
+      const tracks = playbackCollection?.items || [];
+      if (tracks.length) {
+        let nextIndex = activeImmersiveTrackIndex + 1;
+        if (repeatMode === 1 && activeImmersiveTrackIndex >= 0) nextIndex = activeImmersiveTrackIndex;
+        else if (shuffleMode && tracks.length > 1) {
+          do { nextIndex = Math.floor(Math.random() * tracks.length); } while (nextIndex === activeImmersiveTrackIndex);
+        } else if (nextIndex >= tracks.length && repeatMode === 2) nextIndex = 0;
+        if (nextIndex >= 0 && nextIndex < tracks.length) {
+          await handlePlayTrack(tracks[nextIndex]);
+          return;
+        }
+      }
       let next: any = await invoke('dequeue_next_track');
       let autoplayError: any = null;
       if (!next && autoPlayNext) {
@@ -710,12 +857,17 @@
         if (artistId) handleOpenArtist(String(artistId));
       }
     } catch (error: any) {
-      showNotice(typeof error === 'string' ? error : (error?.message || 'Could not complete that song action'));
+      const message = typeof error === 'string' ? error : (error?.message || 'Could not complete that song action');
+      if (message !== 'Download cancelled') showNotice(message);
       return false;
     }
   }
 
   async function prevTrack() {
+    if (playbackCollection?.items?.length && activeImmersiveTrackIndex > 0) {
+      await handlePlayTrack(playbackCollection.items[activeImmersiveTrackIndex - 1]);
+      return;
+    }
     try { await invoke('previous_track'); }
     catch (error: any) { showNotice(typeof error === 'string' ? error : (error?.message || 'Could not play previous track')); }
   }
@@ -754,7 +906,16 @@
       const path: string = await invoke('download_current_track');
       showNotice(`Saved to ${path}`);
     } catch (error: any) {
-      showNotice(typeof error === 'string' ? error : (error?.message || 'Download failed'));
+      const message = typeof error === 'string' ? error : (error?.message || 'Download failed');
+      if (message !== 'Download cancelled') showNotice(message);
+    }
+  }
+
+  async function cancelDownload(jobId: string) {
+    try {
+      await invoke('cancel_download', { jobId });
+    } catch (error: any) {
+      showNotice(typeof error === 'string' ? error : (error?.message || 'Could not cancel download'));
     }
   }
 
@@ -801,6 +962,11 @@
     return `${mins}:${Math.floor(seconds % 60).toString().padStart(2, '0')}`;
   }
 
+  function formatTrackDuration(track: any) {
+    const value = track?.duration_seconds ?? track?.duration;
+    return formatTime(durationInSeconds(value) ?? Number(value) ?? 0);
+  }
+
   function playLibraryItem(item: any) {
     const id = item?.playlistId || item?.playlist_id || item?.browseId || item?.browse_id || item?.id || '';
     if (libraryCategory === 'artists') handleOpenArtist(id);
@@ -828,6 +994,20 @@
   }
 
   $: activeLyricIndex = getActiveLyric(lyricsData?.lines || [], playbackPosition);
+  $: immersiveTracks = playbackCollection?.items?.length
+    ? playbackCollection.items
+    : (nowPlaying ? [nowPlaying, ...queueItems] : queueItems);
+  $: activeImmersiveTrackId = String(nowPlaying?.id || nowPlaying?.videoId || '');
+  $: activeImmersiveTrackIndex = immersiveTracks.findIndex((item: any) => String(item?.videoId || item?.video_id || item?.track_id || item?.id || '') === activeImmersiveTrackId);
+  $: queuePreviewItems = playbackCollection?.items?.length && activeImmersiveTrackIndex >= 0
+    ? playbackCollection.items.slice(activeImmersiveTrackIndex + 1)
+    : queueItems;
+  $: immersiveArtwork = highResArtwork(
+    [nowPlaying?.thumbnail, nowPlaying?.thumbnail_url, playbackCollection?.thumbnail, pageArtwork]
+      .find((source) => source && !/placeholder\.(?:jpg|svg)$/i.test(String(source))) || '/placeholder.svg',
+  );
+  $: activeDownloadJobs = downloadJobs.filter((job) => ['starting', 'downloading', 'converting'].includes(job.status));
+  $: if (activeDownloadJobs.length === 0 && downloadsOpen) downloadsOpen = false;
   $: if ((sidePanel === 'lyrics' || showNowPlaying) && activeLyricIndex >= 0) {
     const scrollKey = `${lyricsTrackId}:${activeLyricIndex}`;
     if (scrollKey !== lastScrolledLyric) {
@@ -841,94 +1021,43 @@
   }
 </script>
 
-<svelte:window on:keydown={handleHotkey} />
+<svelte:window on:keydown={handleHotkey} on:dblclick={openSongActionsOnDoubleClick} on:contextmenu|preventDefault />
 
-<div class="app-shell theme-nebula" class:reduced-motion={motionPreference === 'reduced'} class:flat-backdrop={appearanceBackdrop === 'flat'} class:gradient-backdrop={appearanceBackdrop === 'gradient'} style={`--cover-rgb:${coverRgb};--cover-deep-rgb:${coverDeepRgb}`}>
-  <header class="topbar" class:compact={headerCompact} data-tauri-drag-region>
-    <div class="traffic-light-clearance" data-tauri-drag-region></div>
-    <div class="topbar-history">
-      <button class="chrome-button refresh-button" on:click={() => window.dispatchEvent(new CustomEvent('nova-refresh-current-view'))} aria-label="Refresh">
-        <RotateCw size={16} />
-      </button>
-    </div>
-
-    <div class="global-search-wrap">
-      <div class="global-search" class:focused={searchPopoverOpen}>
-        <Search size={17} />
-        <input
-          bind:this={globalSearchInput}
-          bind:value={globalSearchQuery}
-          on:input={handleGlobalSearchInput}
-          on:focus={() => { searchPopoverOpen = true; }}
-          on:keydown={handleGlobalSearchKeydown}
-          placeholder="What do you want to play?"
-          aria-label="Search YouTube Music"
-          aria-expanded={searchPopoverOpen}
-          aria-controls="global-search-results"
-        />
-        <kbd>⌘ K</kbd>
+<div class="app-shell theme-nebula" class:compact-interface={appearanceDensity === 'compact'} class:search-expanded={searchPopoverOpen && globalSearchQuery.trim().length >= 2} class:panel-hidden={sidePanel === null} class:sidebar-hidden={sidebarHidden} class:reduced-motion={motionPreference === 'reduced'} class:flat-backdrop={appearanceBackdrop === 'flat'} class:gradient-backdrop={appearanceBackdrop === 'gradient'} style={`--cover-rgb:${coverRgb};--cover-deep-rgb:${coverDeepRgb};--lyrics-size:${lyricsFontSize}px;--ambient-image:url("${immersiveArtwork.replaceAll('"', '%22')}")`}>
+  <div class="app-backdrop" aria-hidden="true">
+    {#key immersiveArtwork}<img src={immersiveArtwork || '/placeholder.svg'} alt="" in:fade={{ duration: 520 }} out:fade={{ duration: 360 }} on:error={(event) => recoverArtwork(event, nowPlaying)} />{/key}
+  </div>
+  <header class="topbar">
+    {#if historyIndex > 0 && activeTab !== 'home' && !showNowPlaying}
+      <div class="topbar-history">
+        <button class="chrome-button history-back" on:click={() => navigateHistory(-1)} aria-label="Go back" title="Go back">
+          <ChevronLeft size={17} />
+        </button>
       </div>
-      {#if searchPopoverOpen && globalSearchQuery.trim().length >= 2}
-        <div id="global-search-results" class="global-search-popover" in:fly={{ y: -7, duration: 170 }}>
-          <div class="search-popover-heading"><span>SEARCH YOUTUBE MUSIC</span><button on:click={() => searchPopoverOpen = false} aria-label="Close search results"><X size={15} /></button></div>
-          {#if globalSearchLoading}
-            <div class="search-popover-state"><span class="search-popover-spinner"></span><span>Finding music…</span></div>
-          {:else if globalSearchError}
-            <div class="search-popover-state error">{globalSearchError}</div>
-          {:else if globalSearchResults}
-            {#if quickSearchSongs.length}
-              <div class="search-popover-section"><span class="search-popover-label">SONGS</span>
-                {#each quickSearchSongs as item (item.id || item.videoId)}
-                  <div class="search-result-row">
-                    <button class="search-result-main" on:click={() => chooseGlobalSearchResult(item, 'song')}>
-                      <img src={item.thumbnail || '/placeholder.jpg'} alt="" />
-                      <span class="search-result-copy"><strong>{item.title || 'Untitled track'}</strong><small>{item.artist || item.artists || 'YouTube Music'}</small></span>
-                      <Play size={15} fill="currentColor" />
-                    </button>
-                    <TrackActions track={item} playlists={libraryCollections.playlists} onAction={handleTrackAction} />
-                  </div>
-                {/each}
-              </div>
-            {/if}
-            {#if quickSearchCollections.length}
-              <div class="search-popover-section collection-results"><span class="search-popover-label">MORE RESULTS</span>
-                {#each quickSearchCollections as item (`${item.resultKind}:${item.id}`)}
-                  <button class="search-collection-result" on:click={() => chooseGlobalSearchResult(item, item.resultKind)}>
-                    <img src={item.thumbnail || '/placeholder.jpg'} alt="" />
-                    <span><strong>{item.title || 'Untitled'}</strong><small>{item.resultKind}</small></span>
-                  </button>
-                {/each}
-              </div>
-            {/if}
-            {#if !quickSearchSongs.length && !quickSearchCollections.length}
-              <div class="search-popover-state">No results found for “{globalSearchQuery.trim()}”.</div>
-            {/if}
-            <button class="search-view-all" on:click={openFullSearch}>Show all results for “{globalSearchQuery.trim()}” <ChevronRight size={15} /></button>
-          {:else}
-            <div class="search-popover-state">Search songs, artists, albums, and playlists.</div>
-          {/if}
-        </div>
-      {/if}
-    </div>
-
-    <div class="topbar-actions" data-tauri-drag-region>
+    {/if}
+    <div class="window-drag-space" on:mousedown={startWindowDrag} aria-hidden="true"></div>
+    <div class="topbar-actions">
+      <button class="chrome-button sidebar-toggle" on:click={() => sidebarHidden = !sidebarHidden} aria-label={sidebarHidden ? 'Show sidebar' : 'Hide sidebar'} title={sidebarHidden ? 'Show sidebar' : 'Hide sidebar'} aria-pressed={sidebarHidden}>
+        {#if sidebarHidden}<PanelLeftOpen size={17} />{:else}<PanelLeftClose size={17} />{/if}
+      </button>
+      {#if activeDownloadJobs.length}
       <div class="downloads-wrap">
-        <button class="chrome-button download-top-button" class:active={downloadsOpen} class:downloading={downloadJobs.some((job) => ['starting', 'downloading', 'converting'].includes(job.status))} on:click|stopPropagation={() => downloadsOpen = !downloadsOpen} aria-label="Downloads" aria-expanded={downloadsOpen} title="Downloads">
-          <Download size={17} />
-          {#if downloadJobs.some((job) => ['starting', 'downloading', 'converting'].includes(job.status))}<span class="download-pulse"></span>{/if}
+        <button class="chrome-button download-top-button" class:active={downloadsOpen} class:downloading={activeDownloadJobs.length > 0} on:click|stopPropagation={() => downloadsOpen = !downloadsOpen} aria-label="Active downloads" aria-expanded={downloadsOpen} title="Active downloads">
+          <ArrowDownToLine size={17} />
+          <span class="download-pulse"></span>
         </button>
         {#if downloadsOpen}
           <section class="downloads-popover" aria-label="Downloads">
-            <header><strong>Downloads</strong><span>{downloadJobs.filter((job) => ['starting', 'downloading', 'converting'].includes(job.status)).length} active</span></header>
+            <header><strong>Downloads</strong><span>{activeDownloadJobs.length} active</span><button class="download-popover-close" on:click|stopPropagation={() => downloadsOpen = false} aria-label="Close downloads"><X size={15} /></button></header>
             {#if downloadJobs.length}
               <div class="downloads-list">
                 {#each downloadJobs as job (job.id)}
                   <div class="download-job">
                     <span class="download-job-icon" class:done={job.status === 'completed'} class:failed={job.status === 'failed'}><Download size={15} /></span>
-                    <div class="download-job-copy"><strong>{job.title || 'NOVA Music download'}</strong><small>{job.status === 'completed' ? 'Download complete' : job.status === 'failed' ? (job.error || 'Download failed') : job.status === 'starting' ? 'Finding the best audio stream…' : job.status === 'converting' ? 'Converting audio…' : job.progress == null ? 'Downloading…' : `${Math.round(job.progress)}% · Downloading`}</small>
+                    <div class="download-job-copy"><strong>{job.title || 'NOVA Music download'}</strong><small>{job.status === 'completed' ? 'Download complete' : job.status === 'cancelled' ? 'Download cancelled' : job.status === 'failed' ? (job.error || 'Download failed') : job.status === 'starting' ? 'Finding the best audio stream…' : job.status === 'converting' ? 'Converting audio…' : job.progress == null ? 'Downloading…' : `${Math.round(job.progress)}% · Downloading`}</small>
                       {#if ['starting', 'downloading', 'converting'].includes(job.status)}<span class="download-progress"><i style={`width:${job.progress == null ? 28 : Math.max(3, job.progress)}%`}></i></span>{/if}
                     </div>
-                    {#if job.status === 'completed'}<span class="download-check">✓</span>{:else if ['starting', 'downloading', 'converting'].includes(job.status)}<span class="download-spinner"></span>{/if}
+                    {#if job.status === 'completed'}<span class="download-check">✓</span>{:else if job.status === 'cancelled'}<span class="download-cancelled">Cancelled</span>{:else if ['starting', 'downloading', 'converting'].includes(job.status)}<button class="download-cancel" on:click|stopPropagation={() => void cancelDownload(job.id)} aria-label={`Cancel download of ${job.title || 'song'}`} title="Cancel download"><X size={13} /><span>Cancel</span></button>{/if}
                   </div>
                 {/each}
               </div>
@@ -936,104 +1065,112 @@
           </section>
         {/if}
       </div>
-      <div class="topbar-user-actions">
-        <button class="chrome-button library-toggle" class:selected={librarySidebarOpen} on:click={() => librarySidebarOpen = !librarySidebarOpen} aria-label="Toggle your library">
-          <Library size={18} />
-        </button>
-        <button class="profile-button" on:click={openSettings} aria-label="Account and settings">
-          <span class="profile-avatar">{accountSignedIn ? (accountName.charAt(0).toUpperCase() || 'N') : 'N'}</span>
-          <span class="profile-label">{accountName || 'NOVA Music'}</span>
-          <ChevronDown size={14} />
-        </button>
-        <button class="chrome-button settings-top-button" on:click={openSettings} aria-label="Settings">
-          <Settings2 size={17} />
-        </button>
-      </div>
+      {/if}
     </div>
   </header>
 
   <div class="workarea">
-    <aside class="nav-rail" aria-label="Primary navigation">
-      <button class="brand-mark" on:click={() => navigate('home')} aria-label="NOVA Music home">
-        <Sparkles size={19} />
-      </button>
-      <div class="rail-separator"></div>
-      <button class="rail-button" class:selected={activeTab === 'home' && !showNowPlaying} on:click={() => navigate('home')} aria-label="Home" title="Home">
-        <HomeIcon size={19} />
-      </button>
-      <button class="rail-button" class:selected={activeTab === 'library'} on:click={() => { navigate('library'); librarySidebarOpen = true; }} aria-label="Library" title="Library">
-        <Library size={19} />
-      </button>
-      <button class="rail-button" class:selected={sidePanel === 'queue' || sidePanel === 'now-playing'} on:click={() => toggleSidePanel('queue')} aria-label="Queue" title="Queue">
-        <ListMusic size={19} />
-      </button>
-      <div class="rail-spacer"></div>
-      {#if nowPlaying}
-        <button class="rail-art-button" on:click={openImmersivePlayer} aria-label="Open now playing" title="Now playing">
-          <img src={nowPlaying.thumbnail || '/placeholder.jpg'} alt="" />
-        </button>
-      {/if}
-      <button class="rail-button rail-settings" on:click={openSettings} aria-label="Settings" title="Settings">
-        <Settings2 size={19} />
-      </button>
-    </aside>
+      <aside class="library-sidebar" aria-label="Music navigation">
+        <div class="sidebar-window-space" on:mousedown={startWindowDrag} aria-hidden="true"></div>
+        <button class="sidebar-brand" on:click={() => navigate('home')} aria-label="NOVA Music home"><img class="sidebar-brand-icon" src="/icon.png" alt="" /><strong>NOVA MUSIC</strong></button>
 
-    {#if librarySidebarOpen}
-      <aside class="library-sidebar">
-        <div class="sidebar-heading">
-          <button class="library-title" on:click={() => navigate('library')}>
-            <Library size={17} /> <span>Your Library</span>
-          </button>
-          <button class="icon-button" on:click={() => navigate('playlists')} aria-label="Browse playlists" title="Browse playlists">
-            <Plus size={17} />
-          </button>
-          <button class="icon-button" on:click={() => librarySidebarOpen = false} aria-label="Close library sidebar" title="Close sidebar">
-            <PanelRight size={16} />
-          </button>
-        </div>
-        <div class="library-filters">
-          <button class="filter-chip" class:active={libraryCategory === 'playlists'} on:click={() => libraryCategory = 'playlists'}>Playlists</button>
-          <button class="filter-chip" class:active={libraryCategory === 'albums'} on:click={() => libraryCategory = 'albums'}>Albums</button>
-          <button class="filter-chip" class:active={libraryCategory === 'artists'} on:click={() => libraryCategory = 'artists'}>Artists</button>
-        </div>
-        <div class="library-tools">
-          <button class="sort-button" on:click={() => navigate('library')}>Recently added <ListEnd size={14} /></button>
-        </div>
-        <div class="library-list">
-          <button class="library-entry" on:click={() => handleOpenPlaylist('LM')}>
-            <span class="library-art liked-art"><Heart size={19} fill="currentColor" /></span>
-            <span class="library-copy"><strong>Liked Music</strong><small>Auto playlist</small></span>
-          </button>
-          {#each sidebarLibraryItems as item (item.id || item.playlist_id || item.title)}
-            <button class="library-entry" on:click={() => playLibraryItem(item)}>
-              <span class="library-art">
-                {#if item.thumbnail || item.cover || item.thumbnail_url}
-                  <img src={item.thumbnail || item.cover || item.thumbnail_url} alt="" />
-                {:else}
-                  <Music2 size={18} />
+        <div class="global-search-wrap">
+          <div class="global-search" class:focused={searchPopoverOpen}>
+            <Search size={15} />
+            <input
+              bind:this={globalSearchInput}
+              bind:value={globalSearchQuery}
+              on:input={handleGlobalSearchInput}
+              on:focus={() => { searchPopoverOpen = true; }}
+              on:keydown={handleGlobalSearchKeydown}
+              placeholder="Search"
+              aria-label="Search YouTube Music"
+              aria-expanded={searchPopoverOpen}
+              aria-controls="global-search-results"
+            />
+            <kbd>⌘K</kbd>
+          </div>
+          {#if searchPopoverOpen && globalSearchQuery.trim().length >= 2}
+            <div id="global-search-results" class="global-search-popover" in:fly={{ y: -7, duration: 170 }}>
+              <div class="search-popover-heading"><span>SEARCH YOUTUBE MUSIC</span><button on:click={() => searchPopoverOpen = false} aria-label="Close search results"><X size={15} /></button></div>
+              {#if globalSearchLoading}
+                <div class="search-popover-state"><span class="search-popover-spinner"></span><span>Finding music…</span></div>
+              {:else if globalSearchError}
+                <div class="search-popover-state error">{globalSearchError}</div>
+              {:else if globalSearchResults}
+                {#if quickSearchSongs.length}
+                  <div class="search-popover-section"><span class="search-popover-label">SONGS</span>
+                    {#each quickSearchSongs as item (item.id || item.videoId)}
+                      <div class="search-result-row">
+                        <button class="search-result-main" on:click={() => chooseGlobalSearchResult(item, 'song')}><img src={highResArtwork(item.thumbnail || item.thumbnail_url || '', 700) || '/placeholder.svg'} alt="" on:error={(event) => recoverArtwork(event, item)} /><span class="search-result-copy"><strong>{item.title || 'Untitled track'}</strong><small>{item.artist || item.artists || 'YouTube Music'}</small></span><Play size={15} fill="currentColor" /></button>
+                        <TrackActions track={item} playlists={libraryCollections.playlists} onAction={handleTrackAction} />
+                      </div>
+                    {/each}
+                  </div>
                 {/if}
-              </span>
-              <span class="library-copy"><strong>{item.title || item.name || 'Untitled playlist'}</strong><small>{item.subtitle || item.type || 'Playlist'}</small></span>
-            </button>
-          {/each}
-          {#if sidebarLibraryItems.length === 0}
-            <div class="sidebar-empty">Your saved {libraryCategory} will show up here.</div>
+                {#if quickSearchCollections.length}
+                  <div class="search-popover-section collection-results"><span class="search-popover-label">MORE RESULTS</span>
+                    {#each quickSearchCollections as item (`${item.resultKind}:${item.id}`)}
+                      <button class="search-collection-result" on:click={() => chooseGlobalSearchResult(item, item.resultKind)}><img src={highResArtwork(item.thumbnail || item.thumbnail_url || '', 700) || '/placeholder.svg'} alt="" on:error={(event) => recoverArtwork(event, item)} /><span><strong>{item.title || 'Untitled'}</strong><small>{item.resultKind}</small></span></button>
+                    {/each}
+                  </div>
+                {/if}
+                {#if !quickSearchSongs.length && !quickSearchCollections.length}<div class="search-popover-state">No results found for “{globalSearchQuery.trim()}”.</div>{/if}
+                <button class="search-view-all" on:click={openFullSearch}>Show all results for “{globalSearchQuery.trim()}” <ChevronRight size={15} /></button>
+              {:else}<div class="search-popover-state">Search songs, artists, albums, and playlists.</div>{/if}
+            </div>
           {/if}
         </div>
-      </aside>
-    {/if}
 
-    <main class="main-content" class:panel-open={sidePanel !== null} on:scroll={handleMainScroll} on:wheel|nonpassive={handleTrackpadNavigation}>
+        <nav class="sidebar-primary" aria-label="Browse">
+          <button class:active={activeTab === 'home'} on:click={() => navigate('home')}><HomeIcon size={15} /><span>Home</span></button>
+          <button class:active={activeTab === 'search'} on:click={() => openSearchFor('new releases')}><LayoutGrid size={15} /><span>New</span></button>
+          <button on:click={() => openSearchFor('radio')}><Radio size={15} /><span>Radio</span></button>
+          <button on:click={() => openSearchFor('concerts')}><CalendarDays size={15} /><span>Concerts</span></button>
+        </nav>
+
+        <div class="sidebar-library-nav">
+          <button class="sidebar-section-label" on:click={() => openLibraryCategory('Playlists')}><span>Library</span><ChevronDown size={13} /></button>
+          <button on:click={() => openLibraryCategory('Playlists')}><Pin size={15} /><span>Pins</span><ChevronRight size={13} /></button>
+          <button on:click={() => navigate('library')}><Clock3 size={15} /><span>Recently Added</span></button>
+          <button on:click={() => handleOpenPlaylist('NOVA_LIKED')}><Music2 size={15} /><span>Songs</span></button>
+          <button class:active={libraryCategory === 'albums'} on:click={() => openLibraryCategory('Albums')}><Disc size={15} /><span>Albums</span></button>
+          <button class:active={libraryCategory === 'artists'} on:click={() => openLibraryCategory('Artists')}><UserRound size={15} /><span>Artists</span></button>
+          <button on:click={() => openSearchFor('music videos')}><Clapperboard size={15} /><span>Music Videos</span></button>
+          <button on:click={() => openSearchFor('podcasts')}><Podcast size={15} /><span>Podcasts</span></button>
+          <button on:click={() => openLibraryCategory('Playlists')}><ListMusic size={15} /><span>Apple Music Playlists</span><ChevronRight size={13} /></button>
+        </div>
+
+        <div class="sidebar-playlists">
+          <div class="sidebar-section-label"><span>Playlists</span><span class="sidebar-section-actions"><button class="sidebar-add" on:click={() => openLibraryCategory('Playlists')} aria-label="More playlist options"><MoreHorizontal size={14} /></button><button class="sidebar-add" on:click={() => openLibraryCategory('Playlists')} aria-label="Collapse playlists"><ChevronDown size={13} /></button></span></div>
+          <button class="sidebar-playlist-entry" on:click={() => openLibraryCategory('Playlists')}><span class="sidebar-playlist-art"><Plus size={14} /></span><span>Create New</span></button>
+          <button class="sidebar-playlist-entry" class:active={activeTab === 'playlists' && !activePlaylistId} on:click={() => openLibraryCategory('Playlists')}><span class="sidebar-playlist-art"><LayoutGrid size={14} /></span><span>All Playlists</span></button>
+          <button class="sidebar-playlist-entry" class:active={activePlaylistId === 'NOVA_LIKED'} on:click={() => handleOpenPlaylist('NOVA_LIKED')}><span class="sidebar-playlist-art liked-art"><Star size={14} fill="currentColor" /></span><span>Favorite Songs</span></button>
+          {#each sidebarLibraryItems as item (item.id || item.playlist_id || item.title)}
+            <button class="sidebar-playlist-entry" on:click={() => playLibraryItem(item)}>
+              <span class="sidebar-playlist-art">{#if item.thumbnail || item.cover || item.thumbnail_url}<img src={highResArtwork(item.thumbnail || item.cover || item.thumbnail_url, 500)} alt="" on:error={(event) => recoverArtwork(event, item)} />{:else}<Music2 size={14} />{/if}</span>
+              <span>{item.title || item.name || 'Untitled playlist'}</span><ChevronRight size={12} />
+            </button>
+          {/each}
+          {#if sidebarLibraryItems.length === 0}<p class="sidebar-empty">Your saved playlists appear here.</p>{/if}
+        </div>
+
+        <button class="sidebar-settings" on:click={openSettings} aria-label="Open settings" title="Settings">
+          <Settings2 size={18} />
+        </button>
+      </aside>
+
+    <main class="main-content" class:panel-open={sidePanel !== null} on:wheel|nonpassive={handleTrackpadNavigation}>
       {#key `${activeTab}:${activePlaylistId || ''}:${activeArtistId}:${activeTab === 'search' ? globalSearchQuery : ''}`}
       <div class="route-layer" in:fly={{ y: 8, duration: 230 }} out:fade={{ duration: 115 }}>
       {#if activeTab === 'home'}
-        <Home accountName={accountName} onPlayTrack={handlePlayTrack} onOpenPlaylist={handleOpenPlaylist} onOpenArtist={handleOpenArtist} onTrackAction={handleTrackAction} playlistOptions={libraryCollections.playlists} />
+        <Home accountName={accountName} currentTrackId={String(nowPlaying?.id || '')} onPlayTrack={handlePlayTrack} onOpenPlaylist={handleOpenPlaylist} onOpenArtist={handleOpenArtist} onTrackAction={handleTrackAction} playlistOptions={libraryCollections.playlists} />
       {:else if activeTab === 'search'}
         <SearchPage initialQuery={globalSearchQuery} onPlayTrack={handlePlayTrack} onOpenPlaylist={handleOpenPlaylist} onOpenArtist={handleOpenArtist} onTrackAction={handleTrackAction} playlistOptions={libraryCollections.playlists} />
       {:else if activeTab === 'library'}
         <LibraryPage onPlayTrack={handlePlayTrack} onOpenPlaylist={handleOpenPlaylist} onOpenArtist={handleOpenArtist} onTrackAction={handleTrackAction} playlistOptions={libraryCollections.playlists} />
       {:else if activeTab === 'playlists'}
-        <Playlists bind:activePlaylistId onPlayTrack={handlePlayTrack} onOpenArtist={handleOpenArtist} onTrackAction={handleTrackAction} playlistOptions={libraryCollections.playlists} />
+        <Playlists bind:activePlaylistId bind:category={playlistCategory} onPlayTrack={handlePlayTrack} onOpenArtist={handleOpenArtist} onTrackAction={handleTrackAction} playlistOptions={libraryCollections.playlists} />
       {:else if activeTab === 'artist'}
         <ArtistsPage artistId={activeArtistId} onPlayTrack={handlePlayTrack} onOpenPlaylist={handleOpenPlaylist} onOpenArtist={handleOpenArtist} onTrackAction={handleTrackAction} playlistOptions={libraryCollections.playlists} />
       {/if}
@@ -1045,16 +1182,18 @@
       <aside class="right-panel">
         <div class="right-panel-header">
           <div class="panel-tabs">
-            <button class:active={sidePanel === 'now-playing'} on:click={() => toggleSidePanel('now-playing')}>Now playing</button>
-            <button class:active={sidePanel === 'queue'} on:click={() => toggleSidePanel('queue')}>Queue</button>
-            <button class:active={sidePanel === 'lyrics'} on:click={() => toggleSidePanel('lyrics')}>Lyrics</button>
+            <button class:active={sidePanel === 'now-playing'} on:click={() => sidePanel = 'now-playing'} aria-label="Now playing" title="Now playing"><Music2 size={15} /></button>
+            <button class:active={sidePanel === 'queue'} on:click={() => { sidePanel = 'queue'; void loadQueue(); }} aria-label="Queue" title="Queue"><ListMusic size={15} /></button>
+            <button class:active={sidePanel === 'lyrics'} on:click={() => toggleSidePanel('lyrics')} aria-label="Lyrics" title="Lyrics"><Mic2 size={15} /></button>
+            <button class:active={shuffleMode} on:click={toggleShuffleMode} aria-label={shuffleMode ? 'Turn shuffle off' : 'Turn shuffle on'} title="Shuffle"><Shuffle size={14} /></button>
           </div>
-          <button class="icon-button" on:click={() => sidePanel = null} aria-label="Close panel"><X size={17} /></button>
+          {#if sidePanel === 'queue'}<span class="queue-item-count">{queuePreviewItems.length + (nowPlaying ? 1 : 0)} items</span>{/if}
+          <button class="icon-button" on:click|stopPropagation={() => sidePanel = null} aria-label="Close panel" title="Close panel"><X size={17} /></button>
         </div>
         {#if sidePanel === 'now-playing'}
           <div class="now-playing-panel">
             {#if nowPlaying}
-              <div class="panel-now-art"><img src={nowPlaying.thumbnail || '/placeholder.jpg'} alt="" /></div>
+              <div class="panel-now-art"><img src={highResArtwork(nowPlaying.thumbnail || '') || '/placeholder.svg'} alt="" on:error={(event) => recoverArtwork(event, nowPlaying)} /></div>
               <div class="panel-now-track">
                 <div class="panel-now-copy">
                   <strong>{nowPlaying.title || 'Unknown track'}</strong>
@@ -1067,7 +1206,7 @@
               <div class="panel-album-card">
                 <div class="panel-album-heading"><strong>Playing from</strong><MoreHorizontal size={18} /></div>
                 <button class="panel-album-link" disabled={!nowPlaying.albumId} on:click={() => nowPlaying.albumId && handleOpenPlaylist(nowPlaying.albumId)}>
-                  <img src={nowPlaying.thumbnail || '/placeholder.jpg'} alt="" />
+                  <img src={highResArtwork(nowPlaying.thumbnail || '') || '/placeholder.svg'} alt="" on:error={(event) => recoverArtwork(event, nowPlaying)} />
                   <span><strong>{nowPlaying.album || 'YouTube Music'}</strong><small>{nowPlaying.album ? 'Album' : 'Current source'}</small></span>
                 </button>
               </div>
@@ -1081,35 +1220,32 @@
           </div>
         {:else if sidePanel === 'queue'}
           <div class="queue-content">
-            <div class="queue-context">
-              <span>PLAYING FROM</span>
-              <strong>{nowPlaying?.playlist || 'Your queue'}</strong>
-              <small>{queueItems.length} {queueItems.length === 1 ? 'track' : 'tracks'} queued</small>
-            </div>
+            <div class="queue-context"><strong>Now Playing</strong></div>
             {#if nowPlaying}
               <button class="queue-track current" on:click={openImmersivePlayer}>
                 <span class="queue-number"><span class="playing-bars"><i></i><i></i><i></i></span></span>
-                <img src={nowPlaying.thumbnail || '/placeholder.jpg'} alt="" />
+                <img src={highResArtwork(nowPlaying.thumbnail || '') || '/placeholder.svg'} alt="" on:error={(event) => recoverArtwork(event, nowPlaying)} />
                 <span class="queue-track-copy"><strong>{nowPlaying.title}</strong><small>{nowPlaying.artist}</small></span>
-                <span class="queue-time">{formatTime(playbackDuration)}</span>
+                <span class="queue-time"><Heart size={13} fill={trackIsLiked(nowPlaying) ? 'currentColor' : 'none'} /></span>
               </button>
             {/if}
-            {#each queueItems as item, index (item.track_id || item.id || index)}
+            <div class="queue-next-heading"><span><strong>Playing Next</strong><small>{playbackCollection?.title || nowPlaying?.playlist || 'From your queue'}</small></span><em>{queuePreviewItems.length}</em></div>
+            {#each queuePreviewItems as item, index (item.track_id || item.videoId || item.video_id || item.id || index)}
               <button class="queue-track" on:click={() => handlePlayTrack(item)}>
                 <span class="queue-number">{index + 1}</span>
-                <img src={item.thumbnail_url || item.thumbnail || '/placeholder.jpg'} alt="" />
+                <img src={highResArtwork(item.thumbnail_url || item.thumbnail || '') || '/placeholder.svg'} alt="" on:error={(event) => recoverArtwork(event, item)} />
                 <span class="queue-track-copy"><strong>{item.title || 'Untitled track'}</strong><small>{item.artist || item.subtitle || 'YouTube Music'}</small></span>
-                <span class="queue-time">{formatTime(Number(item.duration_seconds || item.duration || 0))}</span>
+                <span class="queue-time"><MoreHorizontal size={15} /></span>
               </button>
             {/each}
-            {#if queueItems.length === 0 && !nowPlaying}
+            {#if queuePreviewItems.length === 0 && !nowPlaying}
               <div class="panel-empty"><ListMusic size={25} /><p>Your queue is empty.</p><button on:click={() => navigate('search')}>Find something to play</button></div>
             {/if}
           </div>
         {:else}
           <div class="lyrics-content">
             {#if nowPlaying}
-              <div class="lyrics-track-art"><img src={nowPlaying.thumbnail || '/placeholder.jpg'} alt="" /></div>
+              <div class="lyrics-track-art"><img src={highResArtwork(nowPlaying.thumbnail || '') || '/placeholder.svg'} alt="" on:error={(event) => recoverArtwork(event, nowPlaying)} /></div>
               <h2>{nowPlaying.title}</h2>
               <p>{nowPlaying.artist}</p>
               {#if lyricsLoading}
@@ -1138,7 +1274,9 @@
 
   {#if showNowPlaying && nowPlaying}
     <section class="immersive-player" aria-label="Expanded now playing" in:fade={{ duration: 240 }}>
-      <div class="immersive-backdrop" style={`background-image: url("${nowPlaying.thumbnail || ''}")`}></div>
+      <div class="immersive-backdrop" aria-hidden="true">
+        {#key immersiveArtwork}<img src={immersiveArtwork || '/placeholder.svg'} alt="" in:fade={{ duration: 500 }} out:fade={{ duration: 360 }} on:error={(event) => recoverArtwork(event, nowPlaying)} />{/key}
+      </div>
       <div class="immersive-glass-wash"></div>
       <header class="immersive-header">
         <button class="immersive-close" on:click={closeImmersivePlayer} aria-label="Close expanded player" title="Back to NOVA"><ChevronDown size={21} /></button>
@@ -1147,16 +1285,40 @@
       </header>
 
       <div class="immersive-content">
+        <section class="immersive-playlist" aria-label="Playlist tracks">
+          <div class="immersive-playlist-summary">
+            <img src={highResArtwork(playbackCollection?.thumbnail || nowPlaying.thumbnail || '') || '/placeholder.svg'} alt="" on:error={(event) => recoverArtwork(event, playbackCollection || nowPlaying)} />
+            <div><span>PLAYING FROM</span><h1>{playbackCollection?.title || nowPlaying.album || 'Up Next'}</h1><p>{playbackCollection?.items?.length || immersiveTracks.length} songs · {nowPlaying.artist || 'YouTube Music'}</p></div>
+          </div>
+          <div class="immersive-playlist-tools">
+            <button class="immersive-playlist-play" on:click={() => playbackCollection?.items?.length ? handlePlayTrack(playbackCollection.items[0]) : togglePlay()}><Play size={14} fill="currentColor" /> Play</button>
+            <button class="immersive-tool-button" class:active={shuffleMode} on:click={toggleShuffleMode} aria-label={shuffleMode ? 'Turn shuffle off' : 'Turn shuffle on'} title="Shuffle"><Shuffle size={15} /></button>
+            <button class="immersive-tool-button" on:click={downloadCurrentTrack} aria-label="Download current song" title="Download"><Download size={15} /></button>
+          </div>
+          <div class="immersive-track-scroll">
+            {#each immersiveTracks as item, index (String(item?.videoId || item?.video_id || item?.track_id || item?.id || index))}
+              {@const itemId = String(item?.videoId || item?.video_id || item?.track_id || item?.id || '')}
+              <div class="immersive-song-row-wrap">
+                <button class="immersive-song-row" class:playing={itemId === activeImmersiveTrackId} on:click={() => handlePlayTrack(item)}>
+                  <span class="immersive-song-index">{itemId === activeImmersiveTrackId && isPlaying ? '♫' : index + 1}</span>
+                  <span class="immersive-song-copy"><strong>{item?.title || item?.name || 'Untitled track'}</strong><small>{item?.artist || item?.artists || item?.subtitle || 'YouTube Music'}</small></span>
+                  <span class="immersive-song-duration">{formatTrackDuration(item)}</span>
+                </button>
+                <TrackActions track={item} playlists={libraryCollections.playlists} onAction={handleTrackAction} />
+              </div>
+            {/each}
+          </div>
+        </section>
+
         <section class="immersive-art-column" aria-label="Track artwork and details">
           <div class="immersive-overline"><span><i></i> LIVE SESSION</span><span>{formatTime(playbackPosition)} <b>/</b> {formatTime(playbackDuration)}</span></div>
-          <div class="immersive-artwork"><img src={nowPlaying.thumbnail || '/placeholder.jpg'} alt={`${nowPlaying.title || 'Track'} artwork`} /></div>
           <div class="immersive-track-info">
             <div><span class="immersive-label">PLAYING FROM YOUR MUSIC</span><h1>{nowPlaying.title || 'Unknown track'}</h1><p>{nowPlaying.artist || 'YouTube Music'}{nowPlaying.album ? ` · ${nowPlaying.album}` : ''}</p></div>
             <button class="immersive-like" class:liked={trackIsLiked(nowPlaying)} on:click={toggleLikeTrack} aria-label={trackIsLiked(nowPlaying) ? 'Remove from Liked Music' : 'Add to Liked Music'} title={trackIsLiked(nowPlaying) ? 'Remove from Liked Music' : 'Add to Liked Music'}><Heart size={22} fill={trackIsLiked(nowPlaying) ? 'currentColor' : 'none'} /></button>
           </div>
-          <div class="immersive-art-actions">
-            <button class="immersive-secondary-action" on:click={downloadCurrentTrack}><Download size={16} /> Download</button>
-            <button class="immersive-secondary-action" on:click={async () => { await closeImmersivePlayer(); sidePanel = 'queue'; await loadQueue(); }}><ListMusic size={16} /> Up Next <span>{queueItems.length}</span></button>
+          <div class="immersive-next-up">
+            <div><span class="immersive-label">UP NEXT</span><strong>{queuePreviewItems[0]?.title || 'End of queue'}</strong><small>{queuePreviewItems[0]?.artist || 'Add songs to keep listening'}</small></div>
+            <button class="immersive-secondary-action" on:click={async () => { await closeImmersivePlayer(); sidePanel = 'queue'; await loadQueue(); }} aria-label={`Open queue, ${queueItems.length} tracks`} title="Open queue"><ListMusic size={16} /><span>{queueItems.length}</span></button>
             <TrackActions track={nowPlaying} liked={trackIsLiked(nowPlaying)} playlists={libraryCollections.playlists} onAction={handleTrackAction} />
           </div>
         </section>
@@ -1190,9 +1352,11 @@
         <div class="immersive-transport-row">
           <div class="immersive-control-spacer"><button class="immersive-like compact" class:liked={trackIsLiked(nowPlaying)} on:click={toggleLikeTrack} aria-label="Toggle liked song"><Heart size={19} fill={trackIsLiked(nowPlaying) ? 'currentColor' : 'none'} /></button></div>
           <div class="immersive-transport">
+            <button class="transport-button immersive-mode-button" class:active={shuffleMode} on:click={toggleShuffleMode} aria-label="Toggle shuffle" title="Shuffle"><Shuffle size={16} /></button>
             <button class="transport-button" on:click={prevTrack} aria-label="Previous track"><SkipBack size={19} fill="currentColor" /></button>
             <button class="transport-play immersive-play" on:click={togglePlay} aria-label={isPlaying ? 'Pause' : 'Play'} disabled={isLoadingTrack}>{#if isLoadingTrack}<span class="loader-dot"></span>{:else if isPlaying}<Pause size={23} fill="currentColor" />{:else}<Play size={23} fill="currentColor" />{/if}</button>
             <button class="transport-button" on:click={skipTrack} aria-label="Next track"><SkipForward size={19} fill="currentColor" /></button>
+            <button class="transport-button immersive-mode-button" class:active={repeatMode > 0} on:click={cycleRepeatMode} aria-label="Change repeat mode" title={repeatMode === 1 ? 'Repeat one' : repeatMode === 2 ? 'Repeat all' : 'Repeat off'}><Repeat2 size={16} /><span>{repeatMode === 1 ? '1' : ''}</span></button>
           </div>
           <div class="immersive-volume"><button class="immersive-like compact" on:click={toggleMute} aria-label="Mute or unmute">{#if currentVolume === 0}<VolumeX size={18} />{:else}<Volume2 size={18} />{/if}</button><input type="range" min="0" max="100" value={currentVolume} on:input={changeVolume} aria-label="Volume" style={`--progress:${currentVolume}%`} /></div>
         </div>
@@ -1204,7 +1368,7 @@
     <div class="player-track">
       {#if nowPlaying}
         <button class="player-art-button" on:click={openImmersivePlayer} aria-label="Open now playing">
-          <img src={nowPlaying.thumbnail || '/placeholder.jpg'} alt="" />
+          <img src={highResArtwork(nowPlaying.thumbnail || '') || '/placeholder.svg'} alt="" on:error={(event) => recoverArtwork(event, nowPlaying)} />
         </button>
         <div class="player-track-copy">
           <strong title={nowPlaying.title}>{nowPlaying.title || 'Unknown track'}</strong>
@@ -1222,11 +1386,13 @@
 
     <div class="player-center">
       <div class="transport-controls">
+        <button class="player-mode-button" class:active={shuffleMode} on:click={toggleShuffleMode} aria-label="Toggle shuffle" title="Shuffle"><Shuffle size={14} /></button>
         <button class="transport-button" on:click={prevTrack} aria-label="Previous track" title="Previous track"><SkipBack size={17} fill="currentColor" /></button>
         <button class="transport-play" on:click={togglePlay} aria-label={isPlaying ? 'Pause' : 'Play'} title={isPlaying ? 'Pause' : 'Play'} disabled={!nowPlaying || isLoadingTrack}>
           {#if isLoadingTrack}<span class="loader-dot"></span>{:else if isPlaying}<Pause size={19} fill="currentColor" />{:else}<Play size={19} fill="currentColor" />{/if}
         </button>
         <button class="transport-button" on:click={skipTrack} aria-label="Next track" title="Next track"><SkipForward size={17} fill="currentColor" /></button>
+        <button class="player-mode-button" class:active={repeatMode > 0} on:click={cycleRepeatMode} aria-label="Change repeat mode" title={repeatMode === 1 ? 'Repeat one' : repeatMode === 2 ? 'Repeat all' : 'Repeat off'}><Repeat2 size={14} /><span>{repeatMode === 1 ? '1' : ''}</span></button>
       </div>
       <div class="player-progress">
         <span>{formatTime(playbackPosition)}</span>
@@ -1246,10 +1412,9 @@
     </div>
 
     <div class="player-extras">
-      <button class="player-small-action" class:selected={sidePanel === 'now-playing'} on:click={() => toggleSidePanel('now-playing')} aria-label="Now playing" title="Now playing"><PanelRight size={17} /></button>
       <button class="player-small-action" on:click={openImmersivePlayer} aria-label="Open expanded player" title="Expanded player"><Maximize2 size={16} /></button>
+      <button class="player-small-action" class:selected={sidePanel === 'now-playing'} on:click={() => toggleSidePanel('now-playing')} aria-label="Now playing" title="Now playing"><PanelRight size={17} /></button>
       <button class="player-small-action" class:selected={sidePanel === 'lyrics'} on:click={() => toggleSidePanel('lyrics')} aria-label="Lyrics" title="Lyrics"><Mic2 size={17} /></button>
-      <button class="player-small-action" class:selected={sidePanel === 'queue'} on:click={() => toggleSidePanel('queue')} aria-label="Queue" title="Queue"><ListMusic size={17} /></button>
       <div class="volume-control">
         <button class="player-small-action" on:click={toggleMute} aria-label="Mute or unmute" title="Mute or unmute">
           {#if currentVolume === 0}<VolumeX size={17} />{:else}<Volume2 size={17} />{/if}
@@ -1322,8 +1487,7 @@
     -webkit-backdrop-filter: blur(26px) saturate(1.3);
     backdrop-filter: blur(26px) saturate(1.3);
   }
-  .traffic-light-clearance { width: 66px; height: 100%; flex: 0 0 66px; }
-  .topbar-history, .topbar-actions, .topbar-user-actions { display: flex; align-items: center; gap: 8px; }
+  .topbar-history, .topbar-actions { display: flex; align-items: center; gap: 8px; }
   .topbar-history { flex: 0 0 auto; }
   .chrome-button, .icon-button, .player-small-action, .transport-button {
     display: inline-flex;
@@ -1359,13 +1523,10 @@
   .download-job-copy small { overflow: hidden; color: #a1a7a7; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
   .download-progress { height: 3px; overflow: hidden; background: #3a3e3e; border-radius: 4px; }
   .download-progress i { height: 100%; display: block; background: var(--accent); border-radius: inherit; transition: width .22s ease; }
-  .download-spinner { width: 14px; height: 14px; flex: 0 0 14px; border: 2px solid #555; border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
   .download-check { color: #70d8a2; font-size: 16px; }
   .downloads-empty { margin: 0; padding: 28px 16px; color: #969d9d; text-align: center; font-size: 11px; }
   @keyframes download-panel-in { from { opacity: 0; transform: translateY(-5px) scale(.985); } to { opacity: 1; transform: none; } }
-  .refresh-button { margin-left: 5px; }
   .global-search-wrap { position: relative; width: min(460px, 42vw); margin: 0 auto; transition: width .38s cubic-bezier(.2,.8,.2,1), transform .38s cubic-bezier(.2,.8,.2,1); }
-  .topbar.compact .global-search-wrap { width: min(320px, 30vw); }
   .global-search {
     height: 38px;
     width: 100%;
@@ -1382,7 +1543,6 @@
     backdrop-filter: blur(18px) saturate(1.25);
     transition: border-color .16s ease, background .16s ease, box-shadow .16s ease, height .32s cubic-bezier(.2,.8,.2,1), padding .32s cubic-bezier(.2,.8,.2,1);
   }
-  .topbar.compact .global-search { height: 34px; padding-inline: 11px; }
   .global-search:hover, .global-search.focused { background: #202222; border-color: rgba(255,255,255,.2); box-shadow: 0 0 0 3px rgba(var(--cover-rgb),.08), inset 0 1px 0 rgba(255,255,255,.1); }
   .global-search input { min-width: 0; flex: 1; color: #f0f2f2; background: transparent; border: 0; outline: 0; font-size: 13px; }
   .global-search input::placeholder { color: #bfc1c1; opacity: 1; }
@@ -1413,66 +1573,8 @@
   .search-view-all:hover { background: #252929; }
   .topbar-actions { width: auto; max-width: 390px; min-width: 225px; flex: 0 1 auto; justify-content: flex-end; overflow: hidden; }
   .downloads-wrap { flex: 0 0 auto; }
-  .topbar-user-actions { max-width: 350px; min-width: 185px; flex: 0 1 auto; justify-content: flex-end; overflow: hidden; opacity: 1; transform: translateY(0) scale(1); transform-origin: right center; transition: max-width .38s cubic-bezier(.2,.8,.2,1), min-width .38s cubic-bezier(.2,.8,.2,1), opacity .24s ease, transform .38s cubic-bezier(.2,.8,.2,1), gap .38s ease, visibility 0s linear; }
-  .topbar.compact .topbar-actions { max-width: 48px; min-width: 40px; }
-  .topbar.compact .topbar-user-actions { max-width: 0; min-width: 0; gap: 0; opacity: 0; transform: translateY(-8px) scale(.94); pointer-events: none; visibility: hidden; transition: max-width .38s cubic-bezier(.2,.8,.2,1), min-width .38s cubic-bezier(.2,.8,.2,1), opacity .22s ease, transform .38s cubic-bezier(.2,.8,.2,1), gap .38s ease, visibility 0s linear .38s; }
-  .library-toggle.selected { color: var(--accent); }
-  .profile-button {
-    max-width: 220px;
-    height: 34px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 3px 11px 3px 4px;
-    color: #f5f5f5;
-    background: #1a1b1b;
-    border: 1px solid rgba(255,255,255,.08);
-    border-radius: 20px;
-    cursor: pointer;
-  }
-  .profile-button:hover { background: #282a2a; }
-  .profile-avatar { width: 26px; height: 26px; display: grid; place-items: center; color: #111; background: var(--accent); border-radius: 50%; font-size: 12px; font-weight: 800; }
-  .profile-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 650; }
-  .settings-top-button { margin-left: 3px; }
 
   .workarea { min-height: 0; flex: 1; display: flex; overflow: hidden; gap: 0; }
-  .nav-rail {
-    width: 68px;
-    flex: 0 0 68px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 8px;
-    padding: 14px 9px 12px;
-    background: linear-gradient(180deg, rgba(31, 35, 34, .66), rgba(10, 11, 11, .88));
-    border-right: 1px solid rgba(255,255,255,.075);
-    box-shadow: inset -1px 0 0 rgba(255,255,255,.025);
-    -webkit-backdrop-filter: blur(24px) saturate(1.35);
-    backdrop-filter: blur(24px) saturate(1.35);
-  }
-  .brand-mark, .rail-button {
-    width: 44px;
-    height: 44px;
-    flex: 0 0 44px;
-    display: grid;
-    place-items: center;
-    color: #a7aaaa;
-    background: transparent;
-    border: 0;
-    border-radius: 14px;
-    cursor: pointer;
-    transition: color .16s ease, background .16s ease;
-  }
-  .brand-mark { color: #111; background: var(--accent); margin-bottom: 2px; }
-  .brand-mark:hover { filter: brightness(1.08); }
-  .rail-separator { width: 26px; height: 1px; margin: 2px 0 7px; background: rgba(255,255,255,.11); }
-  .rail-button:hover { color: #fff; background: #1a1c1c; }
-  .rail-button.selected { color: #fff; background: #202222; box-shadow: inset 3px 0 0 var(--accent); }
-  .rail-spacer { flex: 1; }
-  .rail-art-button { width: 42px; height: 42px; padding: 0; overflow: hidden; background: transparent; border: 0; border-radius: 9px; cursor: pointer; }
-  .rail-art-button img { display: block; width: 100%; height: 100%; object-fit: cover; }
-  .rail-settings { margin-top: 3px; }
-
   .library-sidebar {
     width: 255px;
     flex: 0 0 255px;
@@ -1487,24 +1589,11 @@
     backdrop-filter: blur(30px) saturate(1.35);
     overflow: hidden;
   }
-  .sidebar-heading { display: flex; align-items: center; gap: 6px; padding: 0 5px 12px; }
-  .library-title { min-width: 0; flex: 1; display: flex; gap: 10px; align-items: center; color: #b7baba; background: none; border: 0; font-size: 14px; font-weight: 700; cursor: pointer; text-align: left; }
-  .library-title:hover { color: #fff; }
   .icon-button { width: 30px; height: 30px; }
-  .library-filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 3px 4px 12px; }
-  .filter-chip { padding: 6px 10px; color: #d1d3d3; background: #242626; border: 0; border-radius: 15px; font-size: 11px; cursor: pointer; }
-  .filter-chip:hover, .filter-chip.active { color: #101212; background: #f4f5f5; }
-  .library-tools { display: flex; align-items: center; justify-content: space-between; padding: 0 2px 9px; color: #8f9393; }
-  .sort-button { display: inline-flex; align-items: center; gap: 7px; color: inherit; background: none; border: 0; font-size: 11px; cursor: pointer; }
-  .library-list { min-height: 0; flex: 1; overflow: auto; scrollbar-width: thin; scrollbar-color: #414444 transparent; }
-  .library-entry { width: 100%; display: flex; align-items: center; gap: 10px; padding: 7px 6px; text-align: left; color: #e4e6e6; background: transparent; border: 0; border-radius: 7px; cursor: pointer; }
-  .library-entry:hover { background: #202222; }
-  .library-art { width: 42px; height: 42px; flex: 0 0 42px; display: grid; place-items: center; overflow: hidden; color: #b9bcbc; background: #282a2a; border-radius: 5px; }
-  .library-art img { width: 100%; height: 100%; object-fit: cover; }
   .liked-art { color: white; background: linear-gradient(135deg, #f7838c, #ad5fce); }
-  .library-copy, .queue-track-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
-  .library-copy strong, .queue-track-copy strong { overflow: hidden; color: #e7e9e9; font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
-  .library-copy small, .queue-track-copy small { overflow: hidden; color: #929696; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+  .queue-track-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+  .queue-track-copy strong { overflow: hidden; color: #e7e9e9; font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+  .queue-track-copy small { overflow: hidden; color: #929696; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
   .sidebar-empty { padding: 16px 8px; color: #858989; font-size: 12px; line-height: 1.5; }
 
   .main-content { min-width: 0; min-height: 0; flex: 1; overflow: auto; background: radial-gradient(ellipse at 48% -10%, rgba(var(--cover-rgb),.14), transparent 45%), radial-gradient(ellipse at 90% 100%, rgba(var(--cover-deep-rgb),.26), transparent 48%), rgba(8,9,9,.96); scrollbar-width: thin; scrollbar-color: #3d4040 transparent; }
@@ -1518,9 +1607,7 @@
   .panel-tabs button.active::after { position: absolute; bottom: 0; left: 0; right: 0; height: 2px; background: #fff; border-radius: 2px; content: ''; }
   .queue-content { min-height: 0; flex: 1; overflow: auto; padding: 15px 10px; }
   .queue-context { display: flex; flex-direction: column; gap: 5px; margin: 1px 7px 16px; }
-  .queue-context span { color: #858989; font-size: 9px; font-weight: 750; letter-spacing: .1em; }
   .queue-context strong { color: #f1f3f3; font-size: 13px; }
-  .queue-context small { color: #898d8d; font-size: 11px; }
   .queue-track { width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px 7px; color: #e7e9e9; text-align: left; background: transparent; border: 0; border-radius: 7px; cursor: pointer; }
   .queue-track:hover { background: #202222; }
   .queue-track.current { background: rgba(255,255,255,.045); }
@@ -1545,10 +1632,10 @@
   .lyrics-placeholder button, .lyrics-retry { padding: 8px 14px; color: #171113; background: var(--accent); border: 0; border-radius: 18px; font-size: 11px; font-weight: 700; cursor: pointer; }
   .lyrics-spinner { width: 20px; height: 20px; border: 2px solid rgba(255,255,255,.18); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
   .lyrics-lines { width: 100%; min-height: 0; flex: 1; display: flex; flex-direction: column; align-items: stretch; gap: 10px; overflow: auto; margin-top: 18px; padding: 8px 4px 22px; scrollbar-width: thin; scrollbar-color: #454a48 transparent; }
-  .lyric-line { width: 100%; padding: 7px 8px; color: #858b89; background: transparent; border: 0; border-radius: 6px; font-size: 13px; line-height: 1.55; text-align: center; cursor: pointer; transition: color .2s ease, background .2s ease; }
+  .lyric-line { width: 100%; padding: 7px 8px; color: #858b89; background: transparent; border: 0; border-radius: 6px; font-size: var(--lyrics-size, 19px); line-height: 1.4; text-align: center; cursor: pointer; transition: color .2s ease, background .2s ease; }
   .lyric-line:hover, .lyric-line.current { color: #fff; background: rgba(255,255,255,.055); }
   .lyric-line.current { color: var(--accent); font-weight: 700; }
-  .lyrics-plain { width: 100%; min-height: 0; flex: 1; overflow: auto; margin-top: 18px; color: #d4d7d6; font-size: 13px; line-height: 1.8; white-space: pre-wrap; }
+  .lyrics-plain { width: 100%; min-height: 0; flex: 1; overflow: auto; margin-top: 18px; color: #d4d7d6; font-size: var(--lyrics-size, 19px); line-height: 1.55; white-space: pre-wrap; }
   .lyrics-plain p { margin: 0 0 8px; }
   .lyrics-attribution { padding: 12px 0 0; color: #777e7b; font-size: 10px; }
 
@@ -1597,8 +1684,6 @@
   .immersive-overline > span:first-child { display: flex; align-items: center; gap: 7px; font-size: 9px; font-weight: 750; letter-spacing: .12em; }
   .immersive-overline i { width: 6px; height: 6px; background: var(--accent); border-radius: 50%; box-shadow: 0 0 12px rgba(var(--cover-rgb),.8); }
   .immersive-overline b { margin: 0 3px; color: rgba(255,255,255,.32); }
-  .immersive-artwork { width: min(100%, 500px, 48vh); aspect-ratio: 1; overflow: hidden; border: 1px solid rgba(255,255,255,.14); border-radius: 10px; background: rgba(255,255,255,.06); box-shadow: 0 30px 88px rgba(0,0,0,.43), 0 0 60px rgba(var(--cover-rgb),.16), inset 0 1px 0 rgba(255,255,255,.16); }
-  .immersive-artwork img { width: 100%; height: 100%; display: block; object-fit: cover; }
   .immersive-track-info { width: min(100%, 500px); display: flex; align-items: center; gap: 16px; padding: 22px 2px 0; }
   .immersive-track-info > div { min-width: 0; flex: 1; }
   .immersive-track-info h1 { overflow: hidden; margin: 7px 0 5px; color: #fff; font-size: clamp(23px, 2.6vw, 34px); line-height: 1.1; letter-spacing: -.045em; text-overflow: ellipsis; white-space: nowrap; }
@@ -1607,7 +1692,6 @@
   .immersive-like:hover { color: #fff; background: rgba(255,255,255,.16); transform: scale(1.04); }
   .immersive-like.liked { color: var(--accent); }
   .immersive-like.compact { width: 37px; height: 37px; flex-basis: 37px; background: transparent; border-color: transparent; }
-  .immersive-art-actions { width: min(100%, 500px); display: flex; gap: 9px; padding-top: 17px; }
   .immersive-secondary-action { display: inline-flex; align-items: center; gap: 8px; padding: 9px 12px; color: rgba(255,255,255,.82); background: rgba(255,255,255,.075); border: 1px solid rgba(255,255,255,.1); border-radius: 20px; font-size: 11px; cursor: pointer; backdrop-filter: blur(18px); }
   .immersive-secondary-action:hover { background: rgba(255,255,255,.14); }
   .immersive-secondary-action span { min-width: 17px; padding: 2px 5px; color: #fff; background: rgba(255,255,255,.13); border-radius: 10px; text-align: center; font-size: 9px; }
@@ -1620,7 +1704,7 @@
   .immersive-lyric.nearby { color: rgba(255,255,255,.65); opacity: .92; filter: none; }
   .immersive-lyric:hover { color: rgba(255,255,255,.78); }
   .immersive-lyric.active { color: #fff; opacity: 1; filter: none; transform: translateX(5px) scale(1.015); text-shadow: 0 5px 30px rgba(var(--cover-rgb),.34); }
-  .immersive-plain-lyrics { color: rgba(255,255,255,.82); font-size: 18px; line-height: 1.8; white-space: pre-wrap; }
+  .immersive-plain-lyrics { color: rgba(255,255,255,.82); font-size: var(--lyrics-size, 19px); line-height: 1.65; white-space: pre-wrap; }
   .immersive-plain-lyrics p { margin: 0 0 8px; }
   .immersive-attribution { padding-top: 10px; color: rgba(255,255,255,.42); font-size: 10px; }
   .immersive-lyrics-empty { min-height: 0; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 13px; color: rgba(255,255,255,.64); text-align: center; }
@@ -1697,9 +1781,7 @@
   @media (max-width: 960px) {
     .library-sidebar { display: none; }
     .right-panel { width: 290px; flex-basis: 290px; }
-    .profile-label { display: none; }
     .topbar-actions { min-width: 100px; }
-    .topbar-user-actions { min-width: 100px; }
     .player-bar { grid-template-columns: minmax(145px,1fr) minmax(260px,1.25fr) minmax(110px,1fr); padding-inline: 10px; }
     .player-extras { gap: 3px; }
     .volume-control input { display: none; }
@@ -1707,7 +1789,6 @@
   @media (max-height: 700px) {
     .immersive-header { height: 56px; flex-basis: 56px; }
     .immersive-content { padding-top: 4px; padding-bottom: 8px; gap: 26px; }
-    .immersive-artwork { width: min(100%, 420px, 42vh); }
     .immersive-lyrics { padding: 20px 24px; }
     .immersive-lyric { padding: 7px 0; font-size: clamp(16px, 1.8vw, 22px); }
     .immersive-controls { padding-bottom: max(12px, env(safe-area-inset-bottom)); }

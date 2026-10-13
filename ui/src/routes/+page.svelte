@@ -1,10 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { fade } from 'svelte/transition';
   import { invoke } from '@tauri-apps/api/core';
   import { Clock, Disc, Heart, LayoutGrid, Music2, Play, Sparkles, UserRound } from 'lucide-svelte';
   import TrackActions from '../lib/TrackActions.svelte';
+  import { artworkUrl, recoverArtwork } from '../lib/artwork';
 
   export let accountName = '';
+  export let currentTrackId = '';
   export let onPlayTrack: (track: any) => void = () => {};
   export let onOpenPlaylist: (id: string) => void = () => {};
   export let onOpenArtist: (id: string) => void = () => {};
@@ -21,8 +24,14 @@
   let loadingMore = false;
   let loadMoreError = '';
   let homeRequestSerial = 0;
+  let recommendationRequestSerial = 0;
+  let recommendationTimer: ReturnType<typeof setTimeout> | undefined;
+  let activeRecommendationSeed = '';
+  let recommendationsEnabled = true;
+  let homeReady = false;
   let refreshListener: (() => void) | undefined;
   let currentGreeting = 'Good evening';
+  let showGreeting = true;
 
   function setGreeting() {
     const hour = new Date().getHours();
@@ -47,6 +56,7 @@
 
   async function loadHome(params?: string | null) {
     const requestSerial = ++homeRequestSerial;
+    const requestedRecommendationSeed = currentTrackId;
     loading = true;
     error = null;
     loadingMore = false;
@@ -56,7 +66,7 @@
     const requests = await Promise.allSettled([
       invoke('get_home', { params: params || null }),
       invoke('get_settings'),
-      params ? Promise.resolve(null) : invoke('get_listening_recommendations'),
+      params ? Promise.resolve(null) : invoke('get_listening_recommendations', { seedTrackId: requestedRecommendationSeed || null }),
     ]);
 
     if (requests[0].status === 'fulfilled') {
@@ -73,12 +83,36 @@
     if (params || settings?.history_enabled === 'false') {
       recentTracks = [];
       listeningMix = null;
+      recommendationsEnabled = false;
     } else {
+      recommendationsEnabled = true;
       try { recentTracks = normalizeHistory(await invoke('get_history')).slice(0, 8); }
       catch (_) { recentTracks = []; }
       listeningMix = requests[2].status === 'fulfilled' ? requests[2].value : null;
     }
+    activeRecommendationSeed = requestedRecommendationSeed;
+    homeReady = true;
+    const ambientArtwork = recentTracks[0]?.thumbnail || recentTracks[0]?.thumbnail_url || recentTracks[0]?.cover || '';
+    if (ambientArtwork) window.dispatchEvent(new CustomEvent('nova-page-artwork', { detail: ambientArtwork }));
     if (requestSerial === homeRequestSerial) loading = false;
+  }
+
+  async function refreshListeningMix(seedTrackId: string) {
+    const requestSerial = ++recommendationRequestSerial;
+    activeRecommendationSeed = seedTrackId;
+    try {
+      const result: any = await invoke('get_listening_recommendations', { seedTrackId });
+      if (requestSerial !== recommendationRequestSerial || seedTrackId !== currentTrackId) return;
+      listeningMix = result;
+    } catch (_) {
+      // Home recommendations are optional; keep the last useful shelf on network errors.
+    }
+  }
+
+  $: if (homeReady && currentTrackId && currentTrackId !== activeRecommendationSeed
+    && recommendationsEnabled && !activeChipParams) {
+    if (recommendationTimer) clearTimeout(recommendationTimer);
+    recommendationTimer = setTimeout(() => void refreshListeningMix(currentTrackId), 360);
   }
 
   async function loadMoreHome() {
@@ -125,12 +159,29 @@
   }
 
   onMount(() => {
-    setGreeting();
+    let greetingTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      if (sessionStorage.getItem('nova-home-greeting-seen') === 'true') showGreeting = false;
+      else {
+        setGreeting();
+        sessionStorage.setItem('nova-home-greeting-seen', 'true');
+        greetingTimer = window.setTimeout(() => {
+          showGreeting = false;
+        }, 2600);
+      }
+    } catch (_) {
+      setGreeting();
+      greetingTimer = window.setTimeout(() => { showGreeting = false; }, 2600);
+    }
     loadHome();
     const refresh = () => loadHome(activeChipParams);
     window.addEventListener('nova-refresh-current-view', refresh);
     refreshListener = () => window.removeEventListener('nova-refresh-current-view', refresh);
-    return () => refreshListener?.();
+    return () => {
+      if (greetingTimer) clearTimeout(greetingTimer);
+      if (recommendationTimer) clearTimeout(recommendationTimer);
+      refreshListener?.();
+    };
   });
 
   function parseDuration(value: any): number | undefined {
@@ -195,7 +246,8 @@
 </script>
 
 <div class="home-container">
-  <section class="home-intro">
+  {#if showGreeting}
+  <section class="home-intro" out:fade={{ duration: 300 }}>
     <div class="greeting-block">
       <div class="greeting-avatar">{accountName ? accountName.charAt(0).toUpperCase() : 'N'}</div>
       <div>
@@ -203,10 +255,8 @@
         <h1>{currentGreeting}, {greetingName}</h1>
       </div>
     </div>
-    <button class="history-button" on:click={() => window.dispatchEvent(new CustomEvent('nova-open-history'))} title="Recently played">
-      <Clock size={17} />
-    </button>
   </section>
+  {/if}
 
   {#if homeData?.chips?.length}
     <nav class="home-chips" aria-label="Music moods">
@@ -237,7 +287,7 @@
           {#each recentTracks.slice(0, 6) as item (item.videoId || item.video_id || item.id || item.title)}
             <div class="recent-card-wrap">
               <button class="recent-card" on:click={() => playItem(item)}>
-                <img src={item.thumbnail || item.thumbnail_url || '/placeholder.jpg'} alt="" loading="lazy" />
+                <img src={artworkUrl(item.thumbnail || item.thumbnail_url || '', 1200) || '/placeholder.svg'} alt="" loading="lazy" on:error={(event) => recoverArtwork(event, item)} />
                 <span class="recent-copy"><strong>{item.title || item.name || 'Unknown track'}</strong><small>{displaySubtitle(item)}</small></span>
                 <span class="recent-play"><Play size={15} fill="currentColor" /></span>
               </button>
@@ -276,7 +326,7 @@
               <div class="shelf-card-wrap">
                 <button class="shelf-card" on:click={() => openItem(item)}>
                   <span class="shelf-art-wrap">
-                    <img src={item.thumbnail || item.thumbnail_url || item.cover || '/placeholder.jpg'} alt="" loading="lazy" />
+                    <img src={artworkUrl(item.thumbnail || item.thumbnail_url || item.cover || '', 1200) || '/placeholder.svg'} alt="" loading="lazy" on:error={(event) => recoverArtwork(event, item)} />
                     <span class="shelf-play"><Play size={17} fill="currentColor" /></span>
                   </span>
                   <span class="shelf-title">{item.title || item.name || 'Untitled'}</span>
@@ -308,23 +358,21 @@
 </div>
 
 <style>
-  .home-container { min-height: 100%; padding: 36px clamp(24px, 4vw, 58px) 72px; background: radial-gradient(ellipse at 42% 0%, rgba(var(--cover-rgb, 244 107 130),.12), transparent 48%), linear-gradient(145deg, rgba(var(--cover-deep-rgb, 30 17 30),.23), transparent 55%), rgba(8,9,9,.76); }
-  .home-intro { min-height: 74px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; }
+  .home-container { min-height: 100%; padding: 26px clamp(24px, 3.4vw, 48px) 56px; background: radial-gradient(ellipse at 42% 0%, rgba(var(--cover-rgb, 244 107 130),.18), transparent 52%), linear-gradient(145deg, rgba(var(--cover-deep-rgb, 30 17 30),.28), transparent 60%), rgba(8,9,9,.6); }
+  .home-intro { min-height: 62px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
   .greeting-block { display: flex; align-items: center; gap: 16px; }
   .greeting-avatar { width: 50px; height: 50px; display: grid; place-items: center; color: #fff; background: var(--accent); border-radius: 50%; font-size: 20px; font-weight: 750; box-shadow: 0 8px 22px rgba(var(--cover-rgb),.24); }
   .greeting-eyebrow { margin-bottom: 3px; color: #a8adad; font-size: 9px; font-weight: 750; letter-spacing: .14em; }
   .greeting-block h1 { margin: 0; color: #fff; font-size: clamp(24px, 3vw, 34px); font-weight: 750; letter-spacing: -.045em; line-height: 1.2; }
-  .history-button { width: 40px; height: 40px; display: grid; place-items: center; color: #c5c9c9; background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.09); border-radius: 50%; cursor: pointer; }
-  .history-button:hover { color: white; background: rgba(255,255,255,.12); }
-  .home-chips { display: flex; align-items: center; gap: 8px; overflow-x: auto; padding: 5px 0 18px; margin: 0 0 12px; scrollbar-width: none; }
+  .home-chips { display: flex; align-items: center; gap: 8px; overflow-x: auto; padding: 5px 0 13px; margin: 0 0 8px; scrollbar-width: none; }
   .home-chips::-webkit-scrollbar, .shelf-scroller::-webkit-scrollbar { display: none; }
   .mood-chip { min-height: 34px; flex: 0 0 auto; padding: 0 16px; color: #e5e7e7; background: rgba(255,255,255,.075); border: 1px solid rgba(255,255,255,.035); border-radius: 20px; font-size: 11px; font-weight: 600; cursor: pointer; transition: background .15s ease, color .15s ease; }
   .mood-chip:hover { background: rgba(255,255,255,.13); }
   .mood-chip.active { color: #111; background: #f7f8f8; }
   .mood-chip.all-chip { width: 36px; padding: 0; display: grid; place-items: center; color: #d8dddd; background: transparent; border-color: rgba(255,255,255,.18); }
   .mood-chip.all-chip.active { color: #121414; background: #f7f8f8; }
-  .home-section { margin: 18px 0 28px; }
-  .home-section-heading { min-height: 31px; display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 0 12px; }
+  .home-section { margin: 12px 0 21px; }
+  .home-section-heading { min-height: 31px; display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 0 9px; }
   .section-title-wrap { min-width: 0; display: flex; align-items: center; gap: 9px; color: #b4b9b9; }
   .section-title-wrap h2 { overflow: hidden; margin: 0; color: #f7f8f8; font-size: 17px; font-weight: 750; letter-spacing: -.03em; text-overflow: ellipsis; white-space: nowrap; }
   .section-caption { color: #858a8a; font-size: 10px; }
@@ -349,9 +397,9 @@
   .shortcut-card > span:nth-child(2) { flex: 1; display: flex; flex-direction: column; gap: 4px; }
   .shortcut-card strong { font-size: 12px; }
   .shortcut-card small { color: #a0a5a5; font-size: 10px; }
-  .shelf-scroller { display: grid; grid-auto-columns: minmax(130px, 1fr); grid-auto-flow: column; gap: 14px; overflow-x: auto; padding: 2px 0 8px; scrollbar-width: none; }
+  .shelf-scroller { display: grid; grid-auto-columns: clamp(132px, 13vw, 190px); grid-auto-flow: column; gap: 12px; overflow-x: auto; padding: 2px 0 7px; scrollbar-width: none; }
   .shelf-card-wrap { position: relative; min-width: 0; max-width: 205px; }
-  .shelf-card { min-width: 0; max-width: 205px; display: flex; flex-direction: column; padding: 8px; color: #f3f4f4; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 8px; cursor: pointer; transition: background .18s ease, border-color .18s ease; }
+  .shelf-card { min-width: 0; max-width: 205px; display: flex; flex-direction: column; padding: 5px; color: #f3f4f4; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 8px; cursor: pointer; transition: background .18s ease, border-color .18s ease; }
   .shelf-card-wrap .shelf-card { width: 100%; }
   .shelf-card-wrap :global(.track-actions) { position: absolute; z-index: 2; top: 14px; right: 12px; }
   .shelf-card:hover { background: linear-gradient(145deg, rgba(255,255,255,.09), rgba(255,255,255,.025)); border-color: rgba(255,255,255,.065); box-shadow: inset 0 1px 0 rgba(255,255,255,.06); -webkit-backdrop-filter: blur(18px) saturate(1.2); backdrop-filter: blur(18px) saturate(1.2); }

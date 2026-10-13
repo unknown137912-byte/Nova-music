@@ -1,6 +1,7 @@
 <script lang="ts">
 import { onMount } from 'svelte';
 import { invoke } from '@tauri-apps/api/core';
+import { artworkUrl, recoverArtwork } from '../../lib/artwork';
 
 let loading = true;
 let error = null;
@@ -36,6 +37,12 @@ function formatDuration(seconds: number) {
   const secs = seconds % 60;
   return `${minutes}:${secs.toString().padStart(2, '0')}`;
 }
+
+function activateWithKeyboard(event: KeyboardEvent, action: () => unknown) {
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  event.preventDefault();
+  void action();
+}
 </script>
 
 <div class="library-page">
@@ -60,9 +67,9 @@ function formatDuration(seconds: number) {
         {#if library.likedSongs.length > 0}
           <div class="library-grid">
             {#each library.likedSongs as song (song.id)}
-              <div class="library-card" on:click={() => invoke('play_track', { trackId: song.videoId || song.video_id || song.id })}>
+              <div class="library-card" role="button" tabindex="0" on:click={() => invoke('play_track', { trackId: song.videoId || song.video_id || song.id })} on:keydown={(event) => activateWithKeyboard(event, () => invoke('play_track', { trackId: song.videoId || song.video_id || song.id }))}>
                 <div class="library-thumbnail">
-                  <img src={song.thumbnail || '/placeholder.jpg'} alt={song.title} />
+                  <img src={artworkUrl(song.thumbnail, 1000) || '/placeholder.svg'} alt={song.title} on:error={(event) => recoverArtwork(event, song)} />
                 </div>
                 <div class="library-info">
                   <h3>{song.title}</h3>
@@ -83,9 +90,9 @@ function formatDuration(seconds: number) {
         {#if library.playlists.length > 0}
           <div class="library-grid">
             {#each library.playlists as playlist (playlist.id)}
-              <div class="library-card" on:click={() => invoke('get_playlist', { playlistId: playlist.id })}>
+              <div class="library-card" role="button" tabindex="0" on:click={() => invoke('get_playlist', { playlistId: playlist.id })} on:keydown={(event) => activateWithKeyboard(event, () => invoke('get_playlist', { playlistId: playlist.id }))}>
                 <div class="library-thumbnail">
-                  <img src={playlist.thumbnail || '/placeholder.jpg'} alt={playlist.title} />
+                  <img src={artworkUrl(playlist.thumbnail, 1400) || '/placeholder.svg'} alt={playlist.title} on:error={(event) => recoverArtwork(event, playlist)} />
                 </div>
                 <div class="library-info">
                   <h3>{playlist.title}</h3>
@@ -105,9 +112,9 @@ function formatDuration(seconds: number) {
         {#if library.albums.length > 0}
           <div class="library-grid">
             {#each library.albums as album (album.id)}
-              <div class="library-card" on:click={() => invoke('get_album', { albumId: album.id })}>
+              <div class="library-card" role="button" tabindex="0" on:click={() => invoke('get_album', { albumId: album.id })} on:keydown={(event) => activateWithKeyboard(event, () => invoke('get_album', { albumId: album.id }))}>
                 <div class="library-thumbnail">
-                  <img src={album.thumbnail || '/placeholder.jpg'} alt={album.title} />
+                  <img src={artworkUrl(album.thumbnail, 1400) || '/placeholder.svg'} alt={album.title} on:error={(event) => recoverArtwork(event, album)} />
                 </div>
                 <div class="library-info">
                   <h3>{album.title}</h3>
@@ -128,9 +135,9 @@ function formatDuration(seconds: number) {
         {#if library.artists.length > 0}
           <div class="library-grid">
             {#each library.artists as artist (artist.id)}
-              <div class="library-card" on:click={() => invoke('get_artist', { artistId: artist.id })}>
+              <div class="library-card" role="button" tabindex="0" on:click={() => invoke('get_artist', { artistId: artist.id })} on:keydown={(event) => activateWithKeyboard(event, () => invoke('get_artist', { artistId: artist.id }))}>
                 <div class="library-thumbnail">
-                  <img src={artist.thumbnail || '/placeholder.jpg'} alt={artist.name} />
+                  <img src={artworkUrl(artist.thumbnail, 1000) || '/placeholder.svg'} alt={artist.name} on:error={(event) => recoverArtwork(event, artist)} />
                 </div>
                 <div class="library-info">
                   <h3>{artist.name}</h3>
@@ -150,9 +157,9 @@ function formatDuration(seconds: number) {
         {#if library.history.length > 0}
           <div class="library-grid">
             {#each library.history as track (track.id)}
-              <div class="library-card" on:click={() => invoke('play_track', { trackId: track.videoId || track.video_id || track.id })}>
+              <div class="library-card" role="button" tabindex="0" on:click={() => invoke('play_track', { trackId: track.videoId || track.video_id || track.id })} on:keydown={(event) => activateWithKeyboard(event, () => invoke('play_track', { trackId: track.videoId || track.video_id || track.id }))}>
                 <div class="library-thumbnail">
-                  <img src={track.thumbnail || '/placeholder.jpg'} alt={track.title} />
+                  <img src={artworkUrl(track.thumbnail, 1000) || '/placeholder.svg'} alt={track.title} on:error={(event) => recoverArtwork(event, track)} />
                 </div>
                 <div class="library-info">
                   <h4>{track.title}</h4>

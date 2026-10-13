@@ -1,0 +1,1099 @@
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "DM Sans", sans-serif;
+  --reference-ink: #f4eae7;
+  --reference-muted: rgba(255, 244, 239, .58);
+  --reference-edge: rgba(255, 255, 255, .12);
+  --reference-glass: rgba(26, 14, 16, .68);
+}
+
+/* Main window: narrow library, spacious listening canvas, and a persistent queue. */
+#svelte .app-shell {
+  --theme-glass: rgba(26, 14, 16, .68);
+  --theme-side: rgba(17,13,14,.72);
+  --theme-panel: rgba(15,12,13,.68);
+  --theme-wash-a: rgba(12,8,9,.54);
+  --theme-wash-b: rgba(14,10,11,.76);
+  --sidebar-size: clamp(150px, 12vw, 178px);
+  --right-size: clamp(236px, 20vw, 274px);
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--sidebar-size) minmax(0, 1fr) var(--right-size);
+  grid-template-rows: 48px minmax(0, 1fr) 82px;
+  isolation: isolate;
+  min-width: 840px;
+  min-height: 620px;
+  background: #130d0e;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "DM Sans", sans-serif;
+  transition: grid-template-columns .24s cubic-bezier(.2,.8,.2,1);
+}
+#svelte .app-shell.panel-hidden { --right-size: 0px; }
+#svelte .app-shell .app-backdrop {
+  position: absolute;
+  z-index: -2;
+  inset: -34px;
+  background-image: var(--ambient-image);
+  background-position: center;
+  background-size: cover;
+  filter: blur(38px) saturate(1.15);
+  opacity: .42;
+  transform: scale(1.08);
+  pointer-events: none;
+  transition: opacity .45s ease;
+}
+#svelte .app-shell::after {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  background: linear-gradient(118deg, rgba(12,8,9,.54), rgba(14,10,11,.76) 45%, rgba(8,8,9,.79)), linear-gradient(0deg, rgba(20,8,10,.2), rgba(var(--cover-rgb),.08));
+  content: "";
+  pointer-events: none;
+}
+#svelte .app-shell :is(.topbar, .library-sidebar, .main-content, .right-panel, .player-bar) { position: relative; z-index: 1; }
+#svelte .app-shell .topbar {
+  grid-column: 2 / 4;
+  grid-row: 1;
+  min-width: 0;
+  height: auto;
+  flex: initial;
+  gap: 12px;
+  padding: 0 13px 0 18px;
+  background: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+#svelte .app-shell .topbar-history { gap: 2px; }
+#svelte .app-shell .topbar-history .chrome-button {
+  width: 28px;
+  height: 28px;
+  color: rgba(255,255,255,.76);
+  background: rgba(12,10,10,.36);
+  border: 1px solid rgba(255,255,255,.1);
+}
+#svelte .app-shell .topbar-history .chrome-button:hover { background: rgba(255,255,255,.14); }
+#svelte .app-shell .history-back svg { transform: rotate(180deg); }
+#svelte .app-shell .topbar-actions { max-width: none; min-width: 0; flex: 1; justify-content: flex-end; gap: 10px; overflow: visible; }
+#svelte .app-shell .workarea { display: contents; min-height: 0; }
+
+/* Compact left navigation and playlist rail. */
+#svelte .app-shell .library-sidebar {
+  grid-column: 1;
+  grid-row: 1 / 4;
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  flex: initial;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow: visible;
+  padding: 0 10px 9px;
+  color: #eee9e8;
+  background: var(--theme-side);
+  border: 0;
+  box-shadow: 1px 0 0 rgba(255,255,255,.035), inset -1px 0 0 rgba(255,255,255,.025);
+  -webkit-backdrop-filter: blur(32px) saturate(1.18);
+  backdrop-filter: blur(32px) saturate(1.18);
+}
+#svelte .app-shell .sidebar-window-space { height: 23px; flex: 0 0 23px; }
+#svelte .app-shell .sidebar-brand { height: 23px; flex: 0 0 23px; display: flex; align-items: center; gap: 7px; padding: 0 3px; color: rgba(255,255,255,.9); text-align: left; background: transparent; border: 0; cursor: pointer; }
+#svelte .app-shell .sidebar-brand > span { width: 19px; height: 19px; display: grid; place-items: center; color: #f2c5b4; background: linear-gradient(145deg, rgba(255,191,168,.22), rgba(255,255,255,.06)); border: 1px solid rgba(255,255,255,.12); border-radius: 6px; }
+#svelte .app-shell .sidebar-brand strong { font-size: 9px; font-weight: 800; letter-spacing: .12em; }
+#svelte .app-shell .sidebar-brand-icon { width: 19px; height: 19px; flex: 0 0 19px; border-radius: 5px; object-fit: cover; box-shadow: 0 2px 8px rgba(0,0,0,.25); }
+#svelte .app-shell .library-sidebar .global-search-wrap { width: 100%; margin: 9px 0 12px; flex: 0 0 auto; }
+#svelte .app-shell .library-sidebar .global-search { height: 27px; gap: 6px; padding: 0 8px; color: rgba(255,255,255,.65); background: rgba(12,10,10,.5); border: 1px solid rgba(255,255,255,.09); border-radius: 7px; box-shadow: inset 0 1px 0 rgba(255,255,255,.055); }
+#svelte .app-shell .library-sidebar .global-search input { font-size: 10px; }
+#svelte .app-shell .library-sidebar .global-search input::placeholder { color: rgba(255,255,255,.58); }
+#svelte .app-shell .library-sidebar .global-search kbd { display: none; }
+#svelte .app-shell .library-sidebar .global-search-popover { top: calc(100% + 7px); left: 0; width: min(570px, calc(100vw - 175px)); max-height: min(70vh, 620px); transform: none; }
+#svelte .app-shell :is(.sidebar-primary, .sidebar-library-nav, .sidebar-playlists) { display: flex; flex-direction: column; gap: 2px; }
+#svelte .app-shell .sidebar-primary { margin-bottom: 10px; }
+#svelte .app-shell :is(.sidebar-primary button, .sidebar-library-nav > button:not(.sidebar-section-label), .sidebar-playlist-entry) {
+  width: 100%;
+  min-width: 0;
+  min-height: 25px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 6px;
+  overflow: hidden;
+  color: rgba(246,239,237,.72);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color .16s ease, background .16s ease;
+}
+#svelte .app-shell :is(.sidebar-primary button > svg, .sidebar-library-nav > button > svg, .sidebar-playlist-entry > svg) { flex: 0 0 auto; color: rgba(255,255,255,.7); }
+#svelte .app-shell :is(.sidebar-primary button > span, .sidebar-library-nav > button > span, .sidebar-playlist-entry > span:nth-child(2)) { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+#svelte .app-shell :is(.sidebar-primary button:hover, .sidebar-library-nav > button:hover, .sidebar-playlist-entry:hover) { color: #fff; background: rgba(255,255,255,.08); }
+#svelte .app-shell :is(.sidebar-primary button.active, .sidebar-library-nav > button.active) { color: #fff; background: rgba(255,255,255,.1); }
+#svelte .app-shell :is(.sidebar-primary button.active > svg, .sidebar-library-nav > button.active > svg) { color: #f0b6a7; }
+#svelte .app-shell .sidebar-section-label { min-height: 23px; display: flex; align-items: center; justify-content: space-between; padding: 0 4px; color: rgba(255,255,255,.56); background: none; border: 0; text-align: left; cursor: pointer; }
+#svelte .app-shell .sidebar-section-label > span { font-size: 9px; font-weight: 650; letter-spacing: .02em; }
+#svelte .app-shell .sidebar-section-label > svg { color: rgba(255,255,255,.5); }
+#svelte .app-shell .sidebar-playlists { min-height: 0; flex: 1; overflow: auto; margin-top: 8px; padding-bottom: 8px; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.16) transparent; }
+#svelte .app-shell .sidebar-playlists .sidebar-section-label { flex: 0 0 23px; }
+#svelte .app-shell .sidebar-add { width: 22px; height: 22px; display: grid; place-items: center; color: rgba(255,255,255,.68); background: transparent; border: 0; border-radius: 5px; cursor: pointer; }
+#svelte .app-shell .sidebar-add:hover { color: #fff; background: rgba(255,255,255,.1); }
+#svelte .app-shell .sidebar-playlist-entry { min-height: 27px; gap: 7px; padding-inline: 4px; }
+#svelte .app-shell .sidebar-playlist-art { width: 20px; height: 20px; flex: 0 0 20px; display: grid; place-items: center; overflow: hidden; color: #f0d2c9; background: rgba(255,255,255,.09); border-radius: 4px; }
+#svelte .app-shell .sidebar-playlist-art img { width: 100%; height: 100%; object-fit: cover; }
+#svelte .app-shell .sidebar-playlist-art.liked-art { color: #f1c3b3; background: linear-gradient(145deg, #93475a, #47212d); }
+#svelte .app-shell .sidebar-empty { margin: 7px 4px; color: rgba(255,255,255,.42); font-size: 9px; line-height: 1.5; }
+#svelte .app-shell .sidebar-account { min-width: 0; min-height: 39px; flex: 0 0 39px; display: flex; align-items: center; gap: 8px; padding: 4px 5px; color: #f1ecea; text-align: left; background: rgba(255,255,255,.055); border: 1px solid rgba(255,255,255,.07); border-radius: 8px; cursor: pointer; }
+#svelte .app-shell .sidebar-account > span:nth-child(2) { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; overflow: hidden; }
+#svelte .app-shell .sidebar-account :is(strong, small) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#svelte .app-shell .sidebar-account strong { font-size: 9px; font-weight: 700; }
+#svelte .app-shell .sidebar-account small { color: rgba(255,255,255,.48); font-size: 8px; }
+#svelte .app-shell .sidebar-account > svg { color: rgba(255,255,255,.48); }
+#svelte .app-shell .sidebar-account .profile-avatar { width: 24px; height: 24px; flex: 0 0 24px; font-size: 10px; }
+
+/* Main canvas and right queue panel. */
+#svelte .app-shell .main-content { grid-column: 2; grid-row: 2; width: auto; min-width: 0; min-height: 0; flex: initial; overflow: auto; background: rgba(18,11,12,.24); border: 0; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.19) transparent; }
+#svelte .app-shell .main-content.panel-open { border: 0; }
+#svelte .app-shell .route-layer { min-height: 100%; }
+#svelte .app-shell .right-panel { grid-column: 3; grid-row: 1 / 3; width: auto; min-width: 0; min-height: 0; flex: initial; background: var(--theme-panel); border: 0; box-shadow: inset 1px 0 0 rgba(255,255,255,.035); -webkit-backdrop-filter: blur(30px) saturate(1.22); backdrop-filter: blur(30px) saturate(1.22); }
+#svelte .app-shell .right-panel-header { height: 48px; flex: 0 0 48px; padding: 0 12px; border: 0; box-shadow: none; }
+#svelte .app-shell .panel-tabs { gap: 6px; }
+#svelte .app-shell .panel-tabs button { width: 27px; height: 27px; display: grid; place-items: center; color: rgba(255,255,255,.57); background: rgba(255,255,255,.055); border: 1px solid transparent; border-radius: 50%; }
+#svelte .app-shell .panel-tabs button:hover, #svelte .app-shell .panel-tabs button.active { color: #fff; background: rgba(255,255,255,.13); border-color: rgba(255,255,255,.1); }
+#svelte .app-shell .panel-tabs button.active::after { display: none; }
+#svelte .app-shell .queue-item-count { padding: 5px 8px; color: rgba(255,255,255,.7); background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.08); border-radius: 13px; font-size: 9px; white-space: nowrap; }
+#svelte .app-shell .queue-content { padding: 10px 9px 16px; }
+#svelte .app-shell .queue-context { margin: 6px 7px 10px; }
+#svelte .app-shell .queue-context strong { color: #f2e9e6; font-size: 13px; font-weight: 730; }
+#svelte .app-shell .queue-next-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 17px 7px 8px; }
+#svelte .app-shell .queue-next-heading > span { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+#svelte .app-shell .queue-next-heading strong { color: #f5eeec; font-size: 12px; font-weight: 700; }
+#svelte .app-shell .queue-next-heading small { overflow: hidden; color: rgba(255,255,255,.5); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+#svelte .app-shell .queue-next-heading em { min-width: 23px; padding: 4px 6px; color: rgba(255,255,255,.67); background: rgba(255,255,255,.08); border-radius: 12px; font-size: 9px; font-style: normal; text-align: center; }
+#svelte .app-shell .queue-track { min-height: 48px; gap: 7px; padding: 5px; border-radius: 6px; }
+#svelte .app-shell .queue-track.current { background: rgba(255,255,255,.075); }
+#svelte .app-shell .queue-track img { width: 33px; height: 33px; flex-basis: 33px; border-radius: 4px; }
+#svelte .app-shell .queue-number { width: 14px; flex-basis: 14px; font-size: 9px; }
+#svelte .app-shell .queue-track-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+#svelte .app-shell .queue-track-copy :is(strong, small) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#svelte .app-shell .queue-track-copy strong { color: rgba(255,255,255,.9); font-size: 9px; font-weight: 650; }
+#svelte .app-shell .queue-track-copy small { color: rgba(255,255,255,.47); font-size: 8px; }
+#svelte .app-shell .queue-time { min-width: 16px; display: grid; place-items: center; color: rgba(255,255,255,.48); }
+
+/* Floating glass transport; it stays clear of both the library and queue. */
+#svelte .app-shell .player-bar {
+  grid-column: 2;
+  grid-row: 3;
+  justify-self: center;
+  align-self: center;
+  width: calc(100% - 34px);
+  height: 66px;
+  min-width: 0;
+  flex: initial;
+  grid-template-columns: minmax(120px,.86fr) minmax(230px,1.4fr) minmax(95px,.6fr);
+  gap: 12px;
+  padding: 0 12px;
+  background: rgba(30,19,21,.63);
+  border: 1px solid rgba(255,255,255,.17);
+  border-radius: 23px;
+  box-shadow: 0 12px 38px rgba(0,0,0,.29), inset 0 1px 0 rgba(255,255,255,.16);
+  -webkit-backdrop-filter: blur(26px) saturate(1.36);
+  backdrop-filter: blur(26px) saturate(1.36);
+}
+#svelte .app-shell .player-track { gap: 8px; }
+#svelte .app-shell :is(.player-art-button, .player-art-empty) { width: 42px; height: 42px; flex-basis: 42px; border-radius: 5px; }
+#svelte .app-shell .player-track-copy strong { font-size: 10px; }
+#svelte .app-shell .player-track-copy span { font-size: 8px; }
+#svelte .app-shell .player-center { gap: 4px; }
+#svelte .app-shell .transport-controls { height: 26px; gap: 12px; }
+#svelte .app-shell .transport-button { width: 25px; height: 25px; color: rgba(255,255,255,.75); }
+#svelte .app-shell .transport-play { width: 27px; height: 27px; color: #24191a; background: #f6e7e2; box-shadow: 0 2px 12px rgba(255,220,206,.23); }
+#svelte .app-shell .player-mode-button { position: relative; width: 23px; height: 23px; display: grid; place-items: center; padding: 0; color: rgba(255,255,255,.52); background: transparent; border: 0; border-radius: 50%; cursor: pointer; }
+#svelte .app-shell .player-mode-button:hover, #svelte .app-shell .player-mode-button.active { color: #f1b5a6; background: rgba(255,255,255,.08); }
+#svelte .app-shell .player-mode-button span { position: absolute; top: 1px; right: 1px; font-size: 7px; }
+#svelte .app-shell .player-progress { gap: 6px; color: rgba(255,255,255,.52); font-size: 8px; }
+#svelte .app-shell .player-progress span { width: 27px; }
+#svelte .app-shell :is(.player-progress input, .volume-control input) { height: 3px; background: linear-gradient(to right, #f0c2b5 var(--progress), rgba(255,255,255,.24) var(--progress)); }
+#svelte .app-shell .player-extras { gap: 2px; }
+#svelte .app-shell .player-small-action { width: 26px; height: 26px; color: rgba(255,255,255,.63); }
+#svelte .app-shell :is(.player-small-action.selected, .player-small-action.liked) { color: #f0b09e; }
+#svelte .app-shell .volume-control { gap: 2px; }
+#svelte .app-shell .volume-control input { width: 48px; }
+
+/* Album and artist pages keep the artwork in the room, with clean, open headers. */
+#svelte .app-shell .collections-page,
+#svelte .app-shell .home-container,
+#svelte .app-shell .artist-page,
+#svelte .app-shell .library-container,
+#svelte .app-shell .search-container {
+  min-height: 100%;
+  color: var(--reference-ink);
+  background: transparent;
+}
+#svelte .app-shell .collections-page.has-collection::before { display: none; }
+#svelte .app-shell .collection-hero {
+  min-height: 260px;
+  padding: 25px clamp(24px, 3.6vw, 52px) 23px;
+  background: linear-gradient(90deg, rgba(13,9,10,.58), rgba(13,9,10,.18) 64%, rgba(13,9,10,.34)), linear-gradient(0deg, rgba(13,9,10,.57), transparent 65%);
+}
+#svelte .app-shell .collection-hero::before { display: none; }
+#svelte .app-shell .collection-hero::after { background: linear-gradient(0deg, rgba(13,9,10,.34), transparent 60%); }
+#svelte .app-shell .collection-hero-content { align-items: end; gap: clamp(18px, 2.5vw, 30px); }
+#svelte .app-shell .collection-cover {
+  width: clamp(150px, 20vw, 228px);
+  flex: 0 0 clamp(150px, 20vw, 228px);
+  aspect-ratio: 1;
+  border: 1px solid rgba(255,255,255,.16);
+  border-radius: 9px;
+  box-shadow: 0 23px 58px rgba(0,0,0,.43), inset 0 1px 0 rgba(255,255,255,.2);
+}
+#svelte .app-shell .collection-info { max-width: 620px; padding-bottom: 2px; }
+#svelte .app-shell .collection-kind { color: rgba(255,244,239,.74); font-size: 10px; font-weight: 650; letter-spacing: .1em; text-transform: uppercase; }
+#svelte .app-shell .collection-info h1 { margin: 8px 0 8px; color: #f8eae5; font-size: clamp(27px, 3vw, 40px); line-height: 1.04; letter-spacing: -.045em; text-shadow: 0 2px 24px rgba(0,0,0,.32); }
+#svelte .app-shell .collection-description {
+  max-width: 520px;
+  display: -webkit-box;
+  overflow: hidden;
+  color: rgba(255,244,239,.69);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+#svelte .app-shell .collection-meta { color: rgba(255,244,239,.67); font-size: 10px; }
+#svelte .app-shell .collection-meta > * + *::before { color: rgba(255,255,255,.42); }
+#svelte .app-shell .collection-actions { gap: 8px; margin-top: 15px; }
+#svelte .app-shell .play-collection {
+  min-height: 35px;
+  padding: 0 17px;
+  color: #281a1a;
+  background: linear-gradient(135deg, #f5d1c3, #e8a998);
+  border: 1px solid rgba(255,255,255,.24);
+  border-radius: 20px;
+  box-shadow: 0 6px 18px rgba(12,4,5,.25), inset 0 1px 0 rgba(255,255,255,.5);
+}
+#svelte .app-shell .shuffle-collection { min-height: 35px; display: inline-flex; align-items: center; gap: 7px; padding: 0 14px; color: #f3ddd6; background: rgba(39,20,22,.55); border: 1px solid rgba(255,255,255,.16); border-radius: 20px; font-size: 10px; font-weight: 700; cursor: pointer; backdrop-filter: blur(16px); }
+#svelte .app-shell .shuffle-collection:hover { background: rgba(255,255,255,.13); }
+#svelte .app-shell .shuffle-collection:disabled { opacity: .48; cursor: default; }
+#svelte .app-shell .delete-playlist,
+#svelte .app-shell .cancel-delete { min-height: 33px; border-radius: 18px; }
+#svelte .app-shell .track-table {
+  padding: 3px clamp(18px, 2vw, 28px) 26px;
+  background: linear-gradient(180deg, rgba(16,10,11,.7), rgba(9,8,9,.84));
+  -webkit-backdrop-filter: blur(18px) saturate(1.15);
+  backdrop-filter: blur(18px) saturate(1.15);
+}
+#svelte .app-shell .track-table-head { display: none; }
+#svelte .app-shell .track-row {
+  min-height: 47px;
+  padding: 0 9px;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  box-shadow: none;
+}
+#svelte .app-shell .track-row:hover { background: rgba(255,255,255,.075); }
+#svelte .app-shell .track-row-main { grid-template-columns: 32px minmax(0,1fr) minmax(54px,.25fr) 50px; gap: 10px; }
+#svelte .app-shell .track-index { color: rgba(255,244,239,.54); }
+#svelte .app-shell .track-title-cell { gap: 0; }
+#svelte .app-shell .track-title-cell > img { display: none; }
+#svelte .app-shell .track-copy strong { color: rgba(255,248,245,.93); font-size: 11px; font-weight: 560; }
+#svelte .app-shell .track-copy small { color: rgba(255,244,239,.48); font-size: 9px; }
+#svelte .app-shell .track-plays,
+#svelte .app-shell .track-duration { color: rgba(255,244,239,.56); font-size: 10px; }
+#svelte .app-shell .track-actions > button { color: rgba(255,255,255,.58); }
+#svelte .app-shell .library-overview { padding: 24px clamp(22px, 3vw, 42px) 45px; }
+#svelte .app-shell .library-overview-header { padding: 0 0 16px; border: 0; }
+#svelte .app-shell .library-overview-header h1 { color: #f6e8e4; font-size: 30px; letter-spacing: -.04em; }
+#svelte .app-shell .library-search { min-height: 32px; color: rgba(255,255,255,.66); background: rgba(22,14,15,.58); border-color: rgba(255,255,255,.1); }
+#svelte .app-shell .library-search input { color: #fff; }
+#svelte .app-shell .playlist-create { background: rgba(22,14,15,.58); border-color: rgba(255,255,255,.12); }
+#svelte .app-shell .playlist-create button { color: #291a19; background: #edc0b0; }
+#svelte .app-shell .library-categories button { background: rgba(29,18,19,.52); border-color: rgba(255,255,255,.1); }
+#svelte .app-shell .library-categories button.active { color: #291a19; background: #edc0b0; }
+#svelte .app-shell .collection-grid { grid-template-columns: repeat(auto-fill, minmax(164px, 1fr)); gap: 13px; }
+#svelte .app-shell .collection-card {
+  padding: 9px;
+  color: #f6eae6;
+  background: linear-gradient(145deg, rgba(255,255,255,.085), rgba(22,14,15,.56));
+  border: 1px solid rgba(255,255,255,.085);
+  border-radius: 11px;
+  box-shadow: 0 10px 26px rgba(0,0,0,.19), inset 0 1px 0 rgba(255,255,255,.11);
+  transform-style: preserve-3d;
+}
+#svelte .app-shell .collection-card:hover { transform: translateY(-4px) perspective(700px) rotateX(1.4deg); box-shadow: 0 17px 30px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.15); }
+#svelte .app-shell .collection-card-art { border-radius: 7px; box-shadow: 0 11px 24px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.22); }
+#svelte .app-shell .collection-card > strong { font-size: 11px; }
+#svelte .app-shell .collection-card > small { color: rgba(255,244,239,.55); }
+
+/* The immersive player uses a sharp cover backdrop behind the playlist and lyric rails. */
+#svelte .app-shell .immersive-player { background: #190c0e; }
+#svelte .app-shell .immersive-backdrop {
+  inset: 0;
+  filter: none;
+  opacity: .92;
+  transform: none;
+  background-position: center 42%;
+  background-size: cover;
+}
+#svelte .app-shell .immersive-glass-wash {
+  background: linear-gradient(90deg, rgba(19,7,9,.77), rgba(20,8,10,.42) 33%, rgba(20,8,10,.12) 50%, rgba(20,8,10,.43) 67%, rgba(17,7,9,.77)), linear-gradient(0deg, rgba(12,5,7,.64), rgba(12,5,7,.12) 63%, rgba(12,5,7,.33));
+}
+#svelte .app-shell .immersive-content {
+  width: min(1500px, calc(100% - 54px));
+  grid-template-columns: minmax(230px, .82fr) minmax(270px, 1.08fr) minmax(265px, .92fr);
+  gap: clamp(12px, 1.55vw, 24px);
+  padding: 3px 0 9px;
+}
+#svelte .app-shell .immersive-playlist {
+  min-width: 0;
+  height: min(100%, 670px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 12px 8px 8px;
+  background: rgba(28,12,14,.46);
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 16px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.1), 0 18px 52px rgba(0,0,0,.23);
+  -webkit-backdrop-filter: blur(18px) saturate(1.16);
+  backdrop-filter: blur(18px) saturate(1.16);
+}
+#svelte .app-shell .immersive-playlist-summary { display: flex; align-items: center; gap: 11px; padding: 6px 6px 13px; }
+#svelte .app-shell .immersive-playlist-summary > img { width: 57px; height: 57px; flex: 0 0 57px; object-fit: cover; border: 1px solid rgba(255,255,255,.15); border-radius: 8px; box-shadow: 0 7px 22px rgba(0,0,0,.3); }
+#svelte .app-shell .immersive-playlist-summary > div { min-width: 0; }
+#svelte .app-shell .immersive-playlist-summary span { color: rgba(255,241,237,.54); font-size: 8px; font-weight: 750; letter-spacing: .13em; }
+#svelte .app-shell .immersive-playlist-summary h1 { display: -webkit-box; overflow: hidden; margin: 4px 0; color: #f7e8e3; font-size: 14px; line-height: 1.12; letter-spacing: -.025em; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+#svelte .app-shell .immersive-playlist-summary p { overflow: hidden; margin: 0; color: rgba(255,241,237,.52); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+#svelte .app-shell .immersive-playlist-tools { display: flex; align-items: center; gap: 7px; padding: 0 6px 10px; }
+#svelte .app-shell .immersive-playlist-play { min-height: 27px; display: inline-flex; align-items: center; gap: 6px; padding: 0 13px; color: #281819; background: #eec1b2; border: 0; border-radius: 18px; font-size: 9px; font-weight: 750; cursor: pointer; }
+#svelte .app-shell .immersive-tool-button { width: 27px; height: 27px; display: grid; place-items: center; color: rgba(255,255,255,.72); background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.08); border-radius: 50%; cursor: pointer; }
+#svelte .app-shell .immersive-tool-button:hover,
+#svelte .app-shell .immersive-tool-button.active { color: #f2b8a8; background: rgba(255,255,255,.13); }
+#svelte .app-shell .immersive-track-scroll { min-height: 0; flex: 1; overflow: auto; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.2) transparent; }
+#svelte .app-shell .immersive-song-row { width: 100%; min-width: 0; min-height: 39px; display: grid; grid-template-columns: 20px minmax(0,1fr) 32px; align-items: center; gap: 6px; padding: 4px 6px; color: rgba(255,255,255,.79); text-align: left; background: transparent; border: 0; border-radius: 6px; cursor: pointer; }
+#svelte .app-shell .immersive-song-row:hover { background: rgba(255,255,255,.075); }
+#svelte .app-shell .immersive-song-row.playing { color: #f6c0b0; background: rgba(255,220,206,.105); }
+#svelte .app-shell .immersive-song-index { color: rgba(255,255,255,.48); text-align: center; font-size: 9px; font-variant-numeric: tabular-nums; }
+#svelte .app-shell .immersive-song-copy { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+#svelte .app-shell .immersive-song-copy :is(strong,small) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#svelte .app-shell .immersive-song-copy strong { color: inherit; font-size: 9px; font-weight: 600; }
+#svelte .app-shell .immersive-song-copy small { color: rgba(255,244,239,.48); font-size: 8px; }
+#svelte .app-shell .immersive-song-duration { color: rgba(255,255,255,.44); text-align: right; font-size: 8px; font-variant-numeric: tabular-nums; }
+#svelte .app-shell .immersive-art-column { display: none; }
+#svelte .app-shell .immersive-overline { width: 100%; max-width: 500px; padding-bottom: 9px; font-size: 9px; }
+#svelte .app-shell .immersive-track-info { width: min(100%, 500px); padding-top: 15px; }
+#svelte .app-shell .immersive-track-info h1 { font-size: clamp(19px, 2vw, 28px); }
+#svelte .app-shell .immersive-track-info p { font-size: 11px; }
+#svelte .app-shell .immersive-lyrics {
+  height: min(100%, 670px);
+  padding: clamp(18px, 2vw, 27px);
+  background: rgba(27,10,12,.53);
+  border-color: rgba(255,255,255,.17);
+  border-radius: 16px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.12), 0 24px 60px rgba(0,0,0,.28);
+  -webkit-backdrop-filter: blur(25px) saturate(1.18);
+  backdrop-filter: blur(25px) saturate(1.18);
+}
+#svelte .app-shell .immersive-lyrics-header { display: none; }
+#svelte .app-shell .immersive-lyrics-header h2 { font-size: 16px; }
+#svelte .app-shell .immersive-lyric-scroll { padding: 22px 2px 28px; }
+#svelte .app-shell .immersive-lyric { padding: 11px 0; color: rgba(255,243,239,.36); font-size: clamp(16px, calc(var(--lyrics-size, 19px) * 1.2), 34px); line-height: 1.27; filter: none; }
+#svelte .app-shell .immersive-lyric.nearby { color: rgba(255,239,233,.68); }
+#svelte .app-shell .immersive-lyric.active { color: #ffe9e1; text-shadow: 0 5px 27px rgba(var(--cover-rgb),.42); }
+#svelte .app-shell .immersive-plain-lyrics { font-size: clamp(14px, var(--lyrics-size, 19px), 30px); }
+#svelte .app-shell .immersive-controls {
+  width: min(760px, calc(100% - 48px));
+  margin-bottom: max(8px, env(safe-area-inset-bottom));
+  padding: 7px 18px 9px;
+  background: rgba(36,19,21,.74);
+  border: 1px solid rgba(255,255,255,.21);
+  border-radius: 28px;
+  box-shadow: 0 16px 50px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.21);
+  -webkit-backdrop-filter: blur(28px) saturate(1.28);
+  backdrop-filter: blur(28px) saturate(1.28);
+}
+#svelte .app-shell .immersive-timeline { gap: 9px; }
+#svelte .app-shell .immersive-transport-row { padding-top: 2px; }
+#svelte .app-shell .immersive-transport { gap: 14px; }
+#svelte .app-shell .immersive-transport .transport-button { color: rgba(255,248,245,.8); }
+#svelte .app-shell .immersive-play { width: 36px; height: 36px; color: #2a1b1c; background: #f3d8cf; }
+#svelte .app-shell .immersive-mode-button.active { color: #f0ad9c; }
+#svelte .app-shell .immersive-volume input { flex-basis: 68px; width: 68px; }
+
+/* Keep headings and structure while removing the old rules and divider bars. */
+#svelte .app-shell :is(header, [class$="-header"], [class*="-header"], .track-table-head) { border-bottom: 0 !important; box-shadow: none !important; }
+#svelte .app-shell :is(.library-header, .library-toolbar, .search-results-heading) { border-bottom: 0 !important; box-shadow: none !important; }
+#svelte .app-shell :is(.home-container, .library-container, .search-container, .artist-page) { background: transparent !important; }
+#svelte .app-shell .main-content.panel-open { border-right: 0 !important; }
+#svelte .app-shell .settings-window { background: rgba(20,12,14,.97); }
+
+/* Appearance presets affect the full listening canvas and its glass surfaces. */
+#svelte .app-shell.theme-nebula {
+  --theme-side: rgba(31,18,19,.64);
+  --theme-panel: rgba(27,15,17,.64);
+  --accent: var(--user-accent, #f46b82);
+}
+#svelte .app-shell.theme-cyber {
+  --theme-side: rgba(10,24,34,.68);
+  --theme-panel: rgba(10,22,31,.68);
+  --accent: var(--user-accent, #51d6b2);
+  --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent);
+  background: radial-gradient(ellipse at 28% 0%, rgba(34,133,179,.24), transparent 47%), radial-gradient(ellipse at 84% 100%, rgba(45,168,144,.19), transparent 46%), #07121a;
+}
+#svelte .app-shell.theme-cyber::after {
+  background: linear-gradient(118deg, rgba(5,15,22,.39), rgba(7,17,24,.62) 45%, rgba(5,12,18,.65)), linear-gradient(0deg, rgba(6,24,32,.16), rgba(var(--cover-rgb),.09));
+}
+#svelte .app-shell.theme-deepspace {
+  --theme-side: rgba(20,23,29,.69);
+  --theme-panel: rgba(18,20,26,.7);
+  --accent: var(--user-accent, #eeeeee);
+  --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+  background: radial-gradient(ellipse at 30% -15%, rgba(196,204,215,.12), transparent 44%), radial-gradient(ellipse at 95% 105%, rgba(100,111,133,.2), transparent 48%), #090b0e;
+}
+#svelte .app-shell.theme-deepspace::after {
+  background: linear-gradient(118deg, rgba(10,12,15,.48), rgba(13,15,19,.68) 45%, rgba(8,9,12,.74)), linear-gradient(0deg, rgba(12,13,17,.16), rgba(var(--cover-rgb),.045));
+}
+
+/* Compact mode tightens navigation and shelf rhythm without shrinking type. */
+#svelte .app-shell.compact-interface {
+  --sidebar-size: clamp(150px, 12vw, 178px);
+  grid-template-rows: 44px minmax(0, 1fr) 76px;
+}
+#svelte .app-shell.compact-interface :is(.sidebar-primary button, .sidebar-library-nav > button:not(.sidebar-section-label)) { min-height: 22px; }
+#svelte .app-shell.compact-interface .sidebar-playlist-entry { min-height: 24px; }
+#svelte .app-shell.compact-interface .sidebar-primary { margin-bottom: 6px; }
+#svelte .app-shell.compact-interface .sidebar-playlists { margin-top: 4px; }
+#svelte .app-shell.compact-interface .home-section { margin-block: 13px; }
+#svelte .app-shell.compact-interface .player-bar { height: 60px; }
+#svelte .app-shell .settings-nav { background: rgba(14,10,11,.8); border-right: 0; }
+#svelte .app-shell .settings-main-head { background: transparent; }
+#svelte .app-shell .settings-group-label { color: rgba(255,244,239,.48); }
+
+@media (max-width: 1190px) {
+  #svelte .app-shell { --right-size: 224px; }
+  #svelte .app-shell .immersive-content { width: calc(100% - 34px); grid-template-columns: minmax(195px,.78fr) minmax(235px,1fr) minmax(220px,.9fr); gap: 10px; }
+  #svelte .app-shell .immersive-playlist-summary > img { width: 46px; height: 46px; flex-basis: 46px; }
+  #svelte .app-shell .immersive-lyrics { padding: 17px; }
+}
+@media (max-width: 980px) {
+  #svelte .app-shell { grid-template-columns: var(--sidebar-size) minmax(0,1fr); grid-template-rows: 48px minmax(0,1fr) 78px; }
+  #svelte .app-shell .topbar { grid-column: 2; }
+  #svelte .app-shell .right-panel { display: none; }
+  #svelte .app-shell .main-content { grid-column: 2; }
+  #svelte .app-shell .player-bar { grid-column: 2; }
+  #svelte .app-shell .immersive-content { grid-template-columns: minmax(175px,.76fr) minmax(220px,1fr) minmax(190px,.88fr); }
+  #svelte .app-shell .immersive-lyrics { padding: 14px; }
+}
+@media (max-width: 760px) {
+  #svelte .app-shell { min-width: 0; --sidebar-size: 54px; grid-template-rows: 45px minmax(0,1fr) 76px; }
+  #svelte .app-shell .library-sidebar { padding-inline: 6px; }
+  #svelte .app-shell .sidebar-brand strong,
+  #svelte .app-shell .library-sidebar .global-search,
+  #svelte .app-shell .sidebar-primary button > span,
+  #svelte .app-shell .sidebar-library-nav,
+  #svelte .app-shell .sidebar-playlists,
+  #svelte .app-shell .sidebar-account > span:nth-child(2),
+  #svelte .app-shell .sidebar-account > svg { display: none; }
+  #svelte .app-shell .sidebar-brand { justify-content: center; }
+  #svelte .app-shell .sidebar-primary button { justify-content: center; padding: 0; }
+  #svelte .app-shell .sidebar-account { justify-content: center; padding: 4px; }
+  #svelte .app-shell .player-bar { width: calc(100% - 14px); grid-template-columns: minmax(0,1fr) minmax(150px,1.2fr); padding-inline: 8px; }
+  #svelte .app-shell .player-track { min-width: 0; }
+  #svelte .app-shell .player-extras { display: none; }
+  #svelte .app-shell .immersive-content { grid-template-columns: minmax(0,1fr) minmax(0,1fr); grid-template-rows: minmax(0,1fr); }
+  #svelte .app-shell .immersive-playlist { display: none; }
+  #svelte .app-shell .immersive-art-column { display: flex; }
+  #svelte .app-shell .immersive-lyrics { height: min(100%, 580px); }
+  #svelte .app-shell .immersive-controls { width: calc(100% - 24px); }
+}
+@media (max-width: 540px) {
+  #svelte .app-shell { --sidebar-size: 0px; }
+  #svelte .app-shell .library-sidebar { display: none; }
+  #svelte .app-shell .topbar { grid-column: 1 / 3; padding-inline: 11px; }
+  #svelte .app-shell .main-content,
+  #svelte .app-shell .player-bar { grid-column: 1 / 3; }
+  #svelte .app-shell .player-bar { grid-template-columns: minmax(0,1fr) auto; }
+  #svelte .app-shell .player-center { max-width: 175px; }
+  #svelte .app-shell .transport-controls { gap: 6px; }
+  #svelte .app-shell .immersive-header { height: 48px; flex-basis: 48px; }
+  #svelte .app-shell .immersive-header-title { display: none; }
+  #svelte .app-shell .immersive-content { width: calc(100% - 22px); grid-template-columns: 1fr; overflow: auto; padding-block: 5px; }
+  #svelte .app-shell .immersive-art-column { width: 100%; }
+  #svelte .app-shell .immersive-overline { width: min(100%, 340px); }
+  #svelte .app-shell .immersive-lyrics { display: none; }
+  #svelte .app-shell .immersive-controls { padding-inline: 10px; }
+  #svelte .app-shell .immersive-control-spacer { display: none; }
+  #svelte .app-shell .immersive-transport-row { grid-template-columns: 1fr auto; }
+  #svelte .app-shell .immersive-volume input { display: none; }
+}
+
+/* Match the reference window's compact library rail and warm, artwork-led canvas. */
+#svelte .app-shell {
+  --sidebar-size: clamp(146px, 10.2vw, 166px);
+  --right-size: clamp(238px, 18.5vw, 270px);
+  background: transparent;
+}
+#svelte .app-shell::after {
+  z-index: 0;
+  background: linear-gradient(118deg, rgba(8,9,11,.2), rgba(10,9,11,.27) 46%, rgba(8,8,9,.47)),
+    radial-gradient(ellipse at 52% 56%, rgba(82,72,136,.25), transparent 53%),
+    radial-gradient(ellipse at 43% 8%, rgba(68,78,119,.2), transparent 43%),
+    radial-gradient(ellipse at 34% 18%, rgba(var(--cover-rgb),.2), transparent 54%),
+    linear-gradient(0deg, rgba(10,9,12,.19), transparent 62%);
+}
+#svelte .app-shell .app-backdrop { z-index: 0; filter: blur(38px) saturate(1.32); opacity: .64; }
+#svelte .app-shell .main-content { background: rgba(10,10,12,.1); }
+#svelte .app-shell.flat-backdrop .app-backdrop,
+#svelte .app-shell.gradient-backdrop .app-backdrop { display: none; }
+#svelte .app-shell.flat-backdrop::after { background: #090a0c; }
+#svelte .app-shell.gradient-backdrop::after {
+  background: radial-gradient(ellipse at 12% 0%, rgba(93,92,190,.22), transparent 45%), radial-gradient(ellipse at 100% 100%, rgba(20,143,146,.18), transparent 42%), #080909;
+}
+#svelte .app-shell .library-sidebar { z-index: 8; }
+#svelte .app-shell .library-sidebar .global-search-wrap { z-index: 12; }
+#svelte .app-shell .library-sidebar .global-search-popover {
+  left: 0;
+  width: min(430px, calc(100vw - var(--sidebar-size) - 26px));
+  transform: none;
+}
+#svelte .app-shell :is(.sidebar-primary button > span, .sidebar-library-nav > button > span, .sidebar-playlist-entry > span:nth-child(2)) { font-size: 12.5px; }
+#svelte .app-shell :is(.sidebar-primary button, .sidebar-library-nav > button:not(.sidebar-section-label), .sidebar-playlist-entry) { min-height: 27px; }
+#svelte .app-shell .sidebar-section-label > span:first-child { font-size: 10px; }
+#svelte .app-shell .sidebar-section-actions { display: flex; align-items: center; gap: 1px; }
+#svelte .app-shell .sidebar-section-actions .sidebar-add { width: 21px; height: 22px; }
+#svelte .app-shell .sidebar-account strong { font-size: 10px; }
+#svelte .app-shell .sidebar-account small { font-size: 9px; }
+#svelte .app-shell .sidebar-playlist-entry.active { color: #fff; background: rgba(255,255,255,.09); }
+#svelte .app-shell .sidebar-playlist-entry.active .sidebar-playlist-art { color: #f3b5a5; }
+
+/* The progress rail spans the player; transport and utility controls share its lower row. */
+#svelte .app-shell .player-bar {
+  grid-template-columns: minmax(150px,.92fr) minmax(250px,1.3fr) minmax(145px,.88fr);
+  grid-template-rows: 19px 1fr;
+  align-items: center;
+  row-gap: 1px;
+  padding: 5px 16px 6px;
+}
+#svelte .app-shell.panel-hidden .player-bar {
+  grid-column: 1 / -1;
+  width: calc(100% - 36px);
+  z-index: 10;
+  grid-template-columns: minmax(180px,.86fr) minmax(250px,1.25fr) minmax(170px,.86fr);
+  grid-template-rows: 1fr;
+}
+#svelte .app-shell .library-sidebar { grid-row: 1 / 3; }
+#svelte .app-shell .player-track { grid-column: 1; grid-row: 2; min-width: 0; height: 42px; }
+#svelte .app-shell .player-center { display: contents; }
+#svelte .app-shell .player-progress { grid-column: 1 / -1; grid-row: 1; align-self: center; width: 100%; gap: 9px; }
+#svelte .app-shell .player-progress span { width: 32px; color: rgba(255,255,255,.68); font-size: 9px; }
+#svelte .app-shell .transport-controls { grid-column: 2; grid-row: 2; align-self: center; justify-self: center; height: 36px; gap: 17px; }
+#svelte .app-shell .player-extras { grid-column: 3; grid-row: 2; justify-self: end; gap: 5px; }
+#svelte .app-shell .player-progress input { height: 4px; background: linear-gradient(to right, #f7f5f3 var(--progress), rgba(255,255,255,.29) var(--progress)); }
+#svelte .app-shell .player-progress input::-webkit-slider-thumb { width: 9px; height: 9px; opacity: 1; background: #fff; box-shadow: 0 0 0 1px rgba(30,20,20,.35); }
+#svelte .app-shell .player-progress input::-moz-range-thumb { width: 9px; height: 9px; opacity: 1; background: #fff; border: 0; border-radius: 50%; }
+#svelte .app-shell .player-progress input::-moz-range-track { height: 4px; background: rgba(255,255,255,.29); border-radius: 6px; }
+#svelte .app-shell.panel-hidden .player-track { grid-row: 1; }
+#svelte .app-shell.panel-hidden .player-center { display: flex; grid-column: 2; grid-row: 1; width: 100%; max-width: 600px; gap: 3px; }
+#svelte .app-shell.panel-hidden .transport-controls { grid-column: auto; grid-row: auto; height: 27px; gap: 17px; }
+#svelte .app-shell.panel-hidden .player-progress { grid-column: auto; grid-row: auto; width: 100%; gap: 8px; }
+#svelte .app-shell.panel-hidden .player-extras { grid-column: 3; grid-row: 1; }
+
+/* Force three stable fullscreen columns so lyrics cannot fall beneath the track list. */
+#svelte .app-shell .immersive-backdrop { opacity: .92; filter: none; }
+#svelte .app-shell .immersive-glass-wash {
+  background: linear-gradient(90deg, rgba(20,6,8,.67), rgba(20,8,10,.35) 40%, rgba(20,8,10,.45) 72%, rgba(17,6,8,.67)),
+    linear-gradient(0deg, rgba(12,5,7,.6), rgba(12,5,7,.12) 65%, rgba(12,5,7,.29));
+}
+#svelte .app-shell .immersive-content {
+  width: min(1580px, calc(100% - 64px));
+  height: 100%;
+  min-height: 0;
+  grid-template-columns: minmax(0,.94fr) minmax(0,1.12fr) minmax(0,.94fr) !important;
+  grid-template-rows: minmax(0,1fr);
+  grid-auto-flow: row;
+  align-items: stretch;
+  gap: clamp(14px,1.8vw,27px);
+  overflow: hidden;
+  padding: 8px 0 14px;
+}
+#svelte .app-shell .immersive-content > section { grid-row: 1; min-width: 0; min-height: 0; }
+#svelte .app-shell .immersive-playlist,
+#svelte .app-shell .immersive-lyrics { width: 100%; height: min(100%,720px); max-height: 720px; align-self: center; }
+#svelte .app-shell .immersive-playlist { grid-column: 1; }
+#svelte .app-shell .immersive-lyrics { grid-column: 3; }
+#svelte .app-shell .immersive-art-column { width: 100%; max-width: 560px; min-height: 0; justify-self: center; }
+#svelte .app-shell .immersive-backdrop { background-position: center; background-size: cover; }
+#svelte .app-shell .immersive-controls { width: min(700px, 42vw, calc(100% - 42px)); }
+#svelte .app-shell .immersive-timeline input,
+#svelte .app-shell .immersive-volume input { background: linear-gradient(to right, rgba(255,255,255,.98) var(--progress), rgba(255,255,255,.29) var(--progress)); }
+#svelte .app-shell .immersive-timeline input::-webkit-slider-thumb,
+#svelte .app-shell .immersive-volume input::-webkit-slider-thumb { width: 9px; height: 9px; }
+#svelte .app-shell .immersive-timeline input::-moz-range-thumb,
+#svelte .app-shell .immersive-volume input::-moz-range-thumb { width: 9px; height: 9px; background: #fff; border: 0; border-radius: 50%; }
+
+@media (max-width: 1190px) {
+  #svelte .app-shell .player-bar { grid-template-columns: minmax(125px,.86fr) minmax(205px,1.2fr) minmax(125px,.86fr); }
+  #svelte .app-shell .immersive-content { width: calc(100% - 34px); grid-template-columns: minmax(0,.86fr) minmax(0,1.08fr) minmax(0,.86fr) !important; gap: 12px; }
+}
+@media (max-width: 760px) {
+  #svelte .app-shell .player-bar { grid-template-columns: minmax(0,1fr) minmax(155px,1.2fr); grid-template-rows: 1fr; padding-block: 0; }
+  #svelte .app-shell .player-track { grid-column: 1; grid-row: 1; }
+  #svelte .app-shell .player-center { display: flex; grid-column: 2; grid-row: 1; width: 100%; }
+  #svelte .app-shell .transport-controls { grid-column: auto; grid-row: auto; gap: 6px; }
+  #svelte .app-shell .player-progress { grid-column: auto; grid-row: auto; }
+}
+@media (max-width: 540px) {
+  #svelte .app-shell .player-bar { grid-template-columns: minmax(0,1fr) auto; }
+  #svelte .app-shell .player-center { max-width: 175px; }
+}
+
+/* Search results expand in the library rail and stay clear of the music canvas. */
+#svelte .app-shell.search-expanded { --sidebar-size: clamp(220px, 15vw, 260px); }
+#svelte .app-shell .library-sidebar .global-search-popover {
+  left: 0;
+  width: 100%;
+  max-height: min(68vh, 640px);
+  padding: 8px;
+  background: rgba(13,13,14,.98);
+  border-color: rgba(255,255,255,.1);
+  border-radius: 10px;
+}
+#svelte .app-shell .search-result-main { gap: 8px; padding: 6px; }
+#svelte .app-shell .search-result-main > img { width: 34px; height: 34px; flex-basis: 34px; }
+#svelte .app-shell .search-result-copy strong { font-size: 10px; }
+#svelte .app-shell .search-result-copy small { font-size: 8px; }
+#svelte .app-shell .search-popover-heading { padding: 4px 5px 7px; font-size: 8px; }
+#svelte .app-shell .search-popover-section { padding-bottom: 4px; }
+#svelte .app-shell .search-popover-label { padding: 4px 6px; font-size: 8px; }
+
+@media (max-width: 1190px) {
+  #svelte .app-shell.search-expanded { --sidebar-size: clamp(205px, 21vw, 245px); }
+}
+@media (max-width: 760px) {
+  #svelte .app-shell.search-expanded { --sidebar-size: 54px; }
+  #svelte .app-shell.search-expanded .library-sidebar .global-search-popover { width: 245px; left: calc(100% + 7px); }
+  #svelte .app-shell .immersive-content { grid-template-columns: minmax(0,1fr) minmax(0,1fr) !important; }
+  #svelte .app-shell .immersive-lyrics { grid-column: auto; }
+  #svelte .app-shell .immersive-playlist { display: none; }
+  #svelte .app-shell.panel-hidden .player-bar { grid-template-columns: minmax(0,1fr) minmax(150px,1.1fr) minmax(0,1fr); }
+}
+@media (max-width: 540px) {
+  #svelte .app-shell .immersive-content { grid-template-columns: minmax(0,1fr) !important; }
+  #svelte .app-shell .immersive-lyrics { display: none; }
+  #svelte .app-shell.panel-hidden .player-bar { grid-template-columns: minmax(0,1fr) auto; }
+  #svelte .app-shell.panel-hidden .player-center { width: auto; max-width: 175px; }
+  #svelte .app-shell.panel-hidden .player-extras { display: none; }
+  #svelte .app-shell.panel-hidden .player-progress { display: none; }
+}
+
+/* Keep the fullscreen center as the sharp album backdrop, with the list and lyrics floating above it. */
+@media (min-width: 761px) {
+  #svelte .app-shell .immersive-lyrics { background: rgba(27,10,12,.47); }
+  #svelte .app-shell .immersive-controls {
+    width: min(700px, 42vw, calc(100% - 48px));
+    margin-bottom: max(14px, env(safe-area-inset-bottom));
+    padding: 9px 20px 11px;
+    border-radius: 38px;
+  }
+}
+
+/* Let each route share the artwork glow instead of painting an opaque black sheet over it. */
+#svelte .app-shell .home-container {
+  background: radial-gradient(ellipse at 42% 0%, rgba(var(--cover-rgb),.2), transparent 56%),
+    linear-gradient(145deg, rgba(var(--cover-deep-rgb),.3), transparent 60%), rgba(8,9,9,.6);
+}
+#svelte .app-shell :is(.search-container, .library-container, .artist-page, .collections-page) { background: transparent !important; }
+#svelte .app-shell .collection-hero {
+  background: linear-gradient(90deg, rgba(13,9,10,.34), rgba(13,9,10,.1) 64%, rgba(13,9,10,.2)),
+    linear-gradient(0deg, rgba(13,9,10,.31), transparent 65%);
+}
+#svelte .app-shell .collection-hero::after { background: linear-gradient(0deg, rgba(13,9,10,.2), transparent 60%); }
+#svelte .app-shell .track-table {
+  background: linear-gradient(180deg, rgba(16,10,11,.34), rgba(9,8,9,.46));
+  -webkit-backdrop-filter: blur(12px) saturate(1.16);
+  backdrop-filter: blur(12px) saturate(1.16);
+}
+#svelte .app-shell .search-container,
+#svelte .app-shell .library-container,
+#svelte .app-shell .artist-page { background-color: rgba(8,9,9,.48); }
+#svelte .app-shell .search-container { background-image: radial-gradient(ellipse at 44% 0%, rgba(var(--cover-rgb),.17), transparent 56%); }
+#svelte .app-shell .library-container { background-image: radial-gradient(ellipse at 42% 0%, rgba(var(--cover-rgb),.14), transparent 53%); }
+#svelte .app-shell .artist-page { background-image: linear-gradient(180deg, rgba(8,9,9,.14), rgba(8,9,9,.48)); }
+#svelte .app-shell .collections-page {
+  background: radial-gradient(ellipse at 48% 0%, color-mix(in srgb, var(--playlist-tint) 42%, transparent), transparent 58%),
+    linear-gradient(180deg, rgba(8,9,9,.2), rgba(8,9,9,.44) 52%, rgba(8,9,9,.64));
+}
+
+/* Shared artwork atmosphere, readable Apple-style navigation, and a compact recommendation home. */
+#svelte .app-shell {
+  --sidebar-size: clamp(216px, 15vw, 292px);
+  transition: grid-template-columns .22s cubic-bezier(.2,.8,.2,1);
+}
+#svelte .app-shell .topbar { justify-content: space-between; }
+#svelte .app-shell .topbar-history { margin-right: auto; }
+#svelte .app-shell .topbar-history .history-back svg { transform: none; }
+#svelte .app-shell .topbar-actions { flex: 0 0 auto; }
+#svelte .app-shell .app-backdrop { background-image: none; filter: blur(18px) saturate(1.08); opacity: .44; }
+#svelte .app-shell .app-backdrop > img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+#svelte .app-shell::after {
+  background: linear-gradient(118deg, rgba(12,8,9,.43), rgba(14,10,11,.66) 45%, rgba(8,8,9,.72)),
+    linear-gradient(0deg, rgba(20,8,10,.14), rgba(var(--cover-rgb),.09));
+}
+#svelte .app-shell .topbar { grid-column: 2 / 4; }
+#svelte .app-shell .topbar-actions { gap: 7px; }
+#svelte .app-shell .sidebar-toggle { color: rgba(255,255,255,.72); background: rgba(255,255,255,.045); border: 1px solid rgba(255,255,255,.08); }
+#svelte .app-shell .sidebar-toggle:hover,
+#svelte .app-shell .sidebar-toggle[aria-pressed="true"] { color: #fff; background: rgba(255,255,255,.13); }
+#svelte .app-shell .library-sidebar {
+  background: rgba(17,13,14,.51);
+  -webkit-backdrop-filter: blur(22px) saturate(1.16);
+  backdrop-filter: blur(22px) saturate(1.16);
+  transition: background-color .5s ease, opacity .2s ease;
+}
+#svelte .app-shell .library-sidebar .global-search { height: 32px; border-radius: 18px; }
+#svelte .app-shell .library-sidebar .global-search input { font-size: 12px; }
+#svelte .app-shell :is(.sidebar-primary button, .sidebar-library-nav > button:not(.sidebar-section-label), .sidebar-playlist-entry) {
+  min-height: 30px;
+  gap: 10px;
+  border-radius: 7px;
+}
+#svelte .app-shell :is(.sidebar-primary button > svg, .sidebar-library-nav > button > svg, .sidebar-playlist-entry > svg) {
+  width: 16px;
+  height: 16px;
+}
+#svelte .app-shell :is(.sidebar-primary button > span, .sidebar-library-nav > button > span, .sidebar-playlist-entry > span:nth-child(2)) { font-size: 13px; }
+#svelte .app-shell .sidebar-section-label > span:first-child { font-size: 11px; }
+#svelte .app-shell .sidebar-account { min-height: 44px; flex-basis: 44px; }
+#svelte .app-shell .sidebar-account strong { font-size: 11px; }
+#svelte .app-shell .sidebar-account small { font-size: 9px; }
+#svelte .app-shell .right-panel { background: rgba(15,12,13,.49); }
+#svelte .app-shell .main-content { background: rgba(18,11,12,.12); }
+
+#svelte .app-shell.sidebar-hidden { --sidebar-size: 0px; }
+#svelte .app-shell.sidebar-hidden .library-sidebar { display: none; }
+#svelte .app-shell.sidebar-hidden .topbar { grid-column: 1 / 4; }
+#svelte .app-shell.sidebar-hidden:not(.panel-hidden) .player-bar { grid-column: 1 / 3; }
+
+/* Keep the fullscreen background sharp behind its floating track list and lyrics. */
+#svelte .app-shell .immersive-backdrop { inset: 0; overflow: hidden; filter: none; opacity: 1; transform: none; background-image: none !important; }
+#svelte .app-shell .immersive-backdrop > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center; }
+#svelte .app-shell .immersive-glass-wash {
+  background: linear-gradient(90deg, rgba(22,7,9,.56), rgba(22,8,10,.26) 34%, rgba(22,8,10,.16) 50%, rgba(22,8,10,.24) 68%, rgba(18,7,9,.55)),
+    linear-gradient(0deg, rgba(12,5,7,.53), rgba(12,5,7,.06) 62%, rgba(12,5,7,.27));
+}
+#svelte .app-shell .immersive-content { grid-template-columns: minmax(0,.94fr) minmax(0,1.12fr) minmax(0,.94fr) !important; }
+#svelte .app-shell .immersive-playlist { display: flex; grid-column: 1; background: rgba(24,9,11,.17); border-color: transparent; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
+#svelte .app-shell .immersive-art-column { display: flex; grid-column: 2; }
+#svelte .app-shell .immersive-lyrics { grid-column: 3; background: rgba(24,8,10,.48); }
+#svelte .app-shell .immersive-song-row { min-height: 42px; grid-template-columns: 24px minmax(0,1fr) 38px; }
+#svelte .app-shell .immersive-song-copy strong { font-size: 11px; }
+#svelte .app-shell .immersive-song-copy small,
+#svelte .app-shell .immersive-song-duration { font-size: 9px; }
+#svelte .app-shell .immersive-track-info h1 { font-size: clamp(22px, 2.2vw, 30px); }
+#svelte .app-shell .immersive-lyric { font-size: clamp(21px, 2vw, 28px); }
+#svelte .app-shell .immersive-controls { width: min(700px, 42vw, calc(100% - 48px)); }
+
+/* Apple Music-like seek rail: persistent white thumb, visible elapsed time, and smooth scrubbing. */
+#svelte .app-shell .player-progress input {
+  height: 4px;
+  background: linear-gradient(to right, #f5f6f6 var(--progress), rgba(255,255,255,.27) var(--progress));
+}
+#svelte .app-shell .player-progress input::-webkit-slider-thumb { width: 9px; height: 9px; opacity: 1; background: #fff; }
+#svelte .app-shell .player-progress input::-moz-range-thumb { width: 9px; height: 9px; opacity: 1; background: #fff; border: 0; border-radius: 50%; }
+#svelte .app-shell .player-progress input:hover::-webkit-slider-thumb,
+#svelte .app-shell .player-progress input:focus-visible::-webkit-slider-thumb { width: 11px; height: 11px; }
+
+@media (max-width: 980px) {
+  #svelte .app-shell.sidebar-hidden .topbar { grid-column: 1 / 3; }
+  #svelte .app-shell.sidebar-hidden:not(.panel-hidden) .player-bar { grid-column: 1 / 3; }
+}
+@media (max-width: 760px) {
+  #svelte .app-shell .immersive-content { grid-template-columns: minmax(0,1fr) minmax(0,1fr) !important; }
+  #svelte .app-shell .immersive-playlist { display: none; }
+  #svelte .app-shell .immersive-art-column { grid-column: 1; }
+  #svelte .app-shell .immersive-lyrics { grid-column: 2; }
+  #svelte .app-shell.sidebar-hidden { --sidebar-size: 0px; }
+  #svelte .app-shell.sidebar-hidden .topbar,
+  #svelte .app-shell.sidebar-hidden .main-content,
+  #svelte .app-shell.sidebar-hidden .player-bar { grid-column: 1 / 3; }
+}
+
+/* Current pass: keep the cover in the room, glass surfaces see-through, and controls centered. */
+#svelte .app-shell .app-backdrop { opacity: .44; filter: blur(24px) saturate(1.08); }
+#svelte .app-shell::after {
+  background: linear-gradient(118deg, rgba(12,8,9,.48), rgba(14,10,11,.62) 45%, rgba(8,8,9,.68)),
+    linear-gradient(0deg, rgba(20,8,10,.1), rgba(var(--cover-rgb),.08));
+}
+#svelte .app-shell .topbar {
+  border: 0 !important;
+  box-shadow: none !important;
+}
+#svelte .app-shell .window-drag-space {
+  min-width: 24px;
+  height: 100%;
+  flex: 1 1 auto;
+  cursor: default;
+}
+#svelte .app-shell .topbar-actions { flex: 0 0 auto; }
+#svelte .app-shell .sidebar-toggle { margin-top: 7px; }
+#svelte .app-shell .sidebar-window-space { height: 28px; flex-basis: 28px; }
+#svelte .app-shell .sidebar-settings {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  display: grid;
+  place-items: center;
+  align-self: flex-start;
+  margin: auto 0 2px 1px;
+  padding: 0;
+  color: rgba(255,255,255,.72);
+  background: rgba(255,255,255,.065);
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 12px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.1);
+  cursor: pointer;
+  transition: color .18s ease, background .18s ease, transform .18s ease;
+}
+#svelte .app-shell .sidebar-settings:hover { color: #fff; background: rgba(255,255,255,.14); transform: translateY(-1px); }
+#svelte .app-shell .library-sidebar {
+  background: rgba(16,14,17,.32);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  backdrop-filter: blur(18px) saturate(1.2);
+}
+#svelte .app-shell .main-content { background: rgba(12,10,12,.035); border: 0 !important; }
+#svelte .app-shell .main-content:has(.home-container) { border-top: 0 !important; box-shadow: none !important; }
+#svelte .app-shell .home-container {
+  background: radial-gradient(ellipse at 42% 0%, rgba(var(--cover-rgb),.18), transparent 56%),
+    linear-gradient(145deg, rgba(var(--cover-deep-rgb),.18), transparent 60%), rgba(8,9,9,.18) !important;
+}
+#svelte .app-shell .right-panel {
+  background: rgba(16,14,16,.31);
+  border-left: 1px solid rgba(255,255,255,.075);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  backdrop-filter: blur(18px) saturate(1.2);
+}
+#svelte .app-shell .right-panel :is(.panel-album-card, .panel-artist-card) {
+  background: linear-gradient(140deg, rgba(255,255,255,.07), rgba(14,12,14,.27));
+}
+#svelte .app-shell .right-panel .panel-artist-card { background: linear-gradient(155deg, rgba(var(--cover-rgb),.35), rgba(18,14,17,.45)); }
+#svelte .app-shell .right-panel-header { position: relative; z-index: 2; }
+#svelte .app-shell .right-panel-header > .icon-button {
+  width: 31px;
+  height: 31px;
+  flex: 0 0 31px;
+  color: rgba(255,255,255,.76);
+  background: rgba(255,255,255,.055);
+  cursor: pointer;
+  pointer-events: auto;
+}
+#svelte .app-shell .right-panel-header > .icon-button:hover { color: #fff; background: rgba(255,255,255,.16); }
+#svelte .app-shell :is(.queue-content, .now-playing-panel, .lyrics-content) { background: transparent; }
+#svelte .app-shell .queue-track.current { background: rgba(255,255,255,.09); }
+#svelte .app-shell .queue-track:hover { background: rgba(255,255,255,.1); }
+#svelte .app-shell .player-bar {
+  width: min(1280px, calc(100% - 96px));
+  justify-self: center;
+  align-self: center;
+}
+#svelte .app-shell.panel-hidden .player-bar { width: min(1280px, calc(100% - 96px)); }
+
+/* Let the cover palette flow continuously behind the sidebar and home canvas. */
+#svelte .app-shell .library-sidebar {
+  border-right: 0 !important;
+  box-shadow: none !important;
+  background: rgba(16,14,17,.25) !important;
+}
+#svelte .app-shell .main-content { border-left: 0 !important; box-shadow: none !important; }
+#svelte .app-shell .topbar { z-index: 30; }
+#svelte .app-shell .downloads-wrap { z-index: 31; }
+#svelte .app-shell .downloads-popover {
+  right: -7px;
+  width: min(365px, calc(100vw - 28px));
+  color: rgba(255,248,246,.96);
+  background: linear-gradient(145deg, rgba(36,25,27,.96), rgba(15,14,16,.94));
+  border-color: rgba(255,255,255,.16);
+  border-radius: 17px;
+  box-shadow: 0 24px 72px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.09);
+  -webkit-backdrop-filter: blur(30px) saturate(1.32);
+  backdrop-filter: blur(30px) saturate(1.32);
+}
+#svelte .app-shell .downloads-popover > header {
+  height: 54px;
+  gap: 10px;
+  padding-inline: 15px 10px;
+  border-bottom-color: rgba(255,255,255,.09);
+}
+#svelte .app-shell .downloads-popover > header strong { font-size: 14px; letter-spacing: -.01em; }
+#svelte .app-shell .downloads-popover > header span { margin-left: auto; color: rgba(255,255,255,.56); font-size: 10px; }
+#svelte .app-shell .download-popover-close,
+#svelte .app-shell .download-cancel {
+  width: 29px;
+  height: 29px;
+  flex: 0 0 29px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: rgba(255,255,255,.72);
+  background: rgba(255,255,255,.065);
+  border: 1px solid rgba(255,255,255,.09);
+  border-radius: 50%;
+  cursor: pointer;
+  transition: color .16s ease, background .16s ease, transform .16s ease;
+}
+#svelte .app-shell .download-popover-close:hover { color: #fff; background: rgba(255,255,255,.15); }
+#svelte .app-shell .downloads-list { max-height: min(420px, calc(100vh - 160px)); padding: 7px; }
+#svelte .app-shell .download-job { min-height: 76px; gap: 10px; padding: 10px; border: 1px solid transparent; border-radius: 12px; }
+#svelte .app-shell .download-job + .download-job { margin-top: 3px; }
+#svelte .app-shell .download-job:hover { background: rgba(255,255,255,.055); border-color: rgba(255,255,255,.055); }
+#svelte .app-shell .download-job-icon { width: 38px; height: 38px; flex-basis: 38px; border-radius: 11px; }
+#svelte .app-shell .download-job-copy { gap: 6px; }
+#svelte .app-shell .download-job-copy strong { font-size: 11px; }
+#svelte .app-shell .download-job-copy small { font-size: 9px; }
+#svelte .app-shell .download-progress { height: 4px; background: rgba(255,255,255,.13); }
+#svelte .app-shell .download-progress i { background: linear-gradient(90deg, rgba(var(--cover-rgb),.78), rgba(var(--cover-rgb),1)); box-shadow: 0 0 12px rgba(var(--cover-rgb),.32); }
+#svelte .app-shell .download-cancel { width: auto; min-width: 58px; height: 26px; flex-basis: auto; padding-inline: 8px; gap: 3px; color: rgba(255,255,255,.68); background: rgba(255,255,255,.055); border-radius: 8px; font-size: 9px; }
+#svelte .app-shell .download-cancel:hover { color: #fff; background: rgba(230,92,103,.24); border-color: rgba(255,140,148,.24); transform: translateY(-1px); }
+#svelte .app-shell .download-cancelled { color: rgba(255,255,255,.42); font-size: 9px; }
+#svelte .app-shell .downloads-empty { padding: 34px 18px; }
+#svelte .app-shell {
+  -webkit-user-select: none;
+  user-select: none;
+}
+#svelte .app-shell :is(input, textarea, select, [contenteditable="true"]) {
+  -webkit-user-select: text;
+  user-select: text;
+}
+#svelte .app-shell .immersive-song-row-wrap {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0,1fr) 29px;
+  align-items: center;
+  border-radius: 7px;
+}
+#svelte .app-shell .immersive-song-row-wrap .track-actions { width: 29px; height: 30px; justify-content: center; }
+#svelte .app-shell .immersive-song-row-wrap .track-actions .more-button { width: 29px; height: 29px; opacity: 0; }
+#svelte .app-shell .immersive-song-row-wrap:hover .track-actions .more-button,
+#svelte .app-shell .immersive-song-row-wrap .track-actions .more-button[aria-expanded="true"] { opacity: 1; }
+#svelte .app-shell .immersive-song-row-wrap .actions-menu { right: 0; }
+#svelte .app-shell .library-sidebar {
+  background: transparent !important;
+  border-right: 0 !important;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+#svelte .app-shell .main-content {
+  grid-column: 2 / -1 !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+#svelte .app-shell .main-content.panel-open { border-right: 0 !important; }
+#svelte .app-shell .right-panel {
+  position: absolute;
+  z-index: 12;
+  top: 48px;
+  right: 0;
+  bottom: 82px;
+  width: var(--right-size);
+  min-width: 0;
+  border: 0 !important;
+  box-shadow: -18px 0 44px rgba(0,0,0,.16) !important;
+}
+@media (max-width: 760px) {
+  #svelte .app-shell .main-content { grid-column: 1 / -1 !important; }
+  #svelte .app-shell .right-panel { display: none; }
+}
+
+/* The centered column now shows song details and an Up Next preview over the full-bleed art. */
+#svelte .app-shell .immersive-content {
+  grid-template-columns: minmax(220px,.88fr) minmax(285px,1.12fr) minmax(235px,.9fr) !important;
+  align-items: stretch;
+}
+#svelte .app-shell .immersive-playlist {
+  background: rgba(24,9,11,.24);
+  border-color: rgba(255,255,255,.11);
+  -webkit-backdrop-filter: blur(14px) saturate(1.14);
+  backdrop-filter: blur(14px) saturate(1.14);
+}
+#svelte .app-shell .immersive-art-column {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  display: flex;
+  grid-column: 2;
+  align-self: stretch;
+  justify-self: stretch;
+  align-items: stretch;
+  justify-content: flex-start;
+  padding: min(16vh, 150px) clamp(6px, 1.4vw, 22px) 14px;
+}
+#svelte .app-shell .immersive-overline,
+#svelte .app-shell .immersive-track-info,
+#svelte .app-shell .immersive-next-up { width: 100%; max-width: 580px; margin-inline: auto; }
+#svelte .app-shell .immersive-overline { margin-bottom: 20px; }
+#svelte .app-shell .immersive-track-info { padding: 0; }
+#svelte .app-shell .immersive-track-info h1 {
+  overflow: hidden;
+  margin: 9px 0 8px;
+  font-size: clamp(32px, 4vw, 58px);
+  line-height: 1.04;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+#svelte .app-shell .immersive-track-info p { font-size: clamp(13px, 1.1vw, 16px); }
+#svelte .app-shell .immersive-like { background: rgba(18,12,13,.28); backdrop-filter: blur(12px); }
+#svelte .app-shell .immersive-next-up {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: auto;
+  padding: 11px 12px;
+  background: rgba(24,13,14,.38);
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 14px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.1), 0 9px 28px rgba(0,0,0,.18);
+  -webkit-backdrop-filter: blur(15px) saturate(1.16);
+  backdrop-filter: blur(15px) saturate(1.16);
+}
+#svelte .app-shell .immersive-next-up > div { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; }
+#svelte .app-shell .immersive-next-up > div :is(strong, small) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#svelte .app-shell .immersive-next-up > div strong { color: rgba(255,255,255,.92); font-size: 12px; font-weight: 650; }
+#svelte .app-shell .immersive-next-up > div small { color: rgba(255,255,255,.58); font-size: 10px; }
+#svelte .app-shell .immersive-next-up .immersive-label { font-size: 8px; }
+#svelte .app-shell .immersive-next-up .immersive-secondary-action { min-width: 43px; justify-content: center; padding: 8px 10px; }
+#svelte .app-shell .immersive-lyrics {
+  background: rgba(24,8,10,.24);
+  border-color: rgba(255,255,255,.19);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.13), 0 18px 52px rgba(0,0,0,.2);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+  backdrop-filter: blur(14px) saturate(1.2);
+}
+#svelte .app-shell .immersive-lyric { color: rgba(255,248,245,.55); opacity: .92; text-shadow: 0 1px 12px rgba(0,0,0,.24); }
+#svelte .app-shell .immersive-lyric.nearby { color: rgba(255,248,245,.84); }
+#svelte .app-shell .immersive-lyric.active { color: #fff; }
+
+@media (max-height: 820px) {
+  #svelte .app-shell .immersive-art-column { padding-top: 8vh; }
+  #svelte .app-shell .immersive-overline { margin-bottom: 12px; }
+  #svelte .app-shell .immersive-track-info h1 { font-size: clamp(28px, 3.4vw, 46px); }
+}
+@media (max-width: 760px) {
+  #svelte .app-shell .immersive-content { grid-template-columns: minmax(0,1fr) minmax(0,1fr) !important; }
+  #svelte .app-shell .immersive-art-column { grid-column: 1; padding: 8vh 8px 12px; }
+  #svelte .app-shell .immersive-lyrics { grid-column: 2; }
+  #svelte .app-shell .immersive-next-up { padding: 9px; }
+  #svelte .app-shell .sidebar-settings { align-self: center; }
+}
+@media (max-width: 540px) {
+  #svelte .app-shell .immersive-art-column { grid-column: 1; padding: 8vh 10px 12px; }
+  #svelte .app-shell .immersive-track-info h1 { font-size: clamp(26px, 7vw, 38px); }
+  #svelte .app-shell .immersive-next-up { gap: 6px; }
+  #svelte .app-shell .immersive-next-up > .track-actions { display: none; }
+}

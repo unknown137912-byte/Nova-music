@@ -3,6 +3,7 @@ import { onMount } from 'svelte';
 import { invoke } from '@tauri-apps/api/core';
 import TrackActions from '../../lib/TrackActions.svelte';
 import { RefreshCw, Clock3 } from 'lucide-svelte';
+import { artworkUrl, recoverArtwork } from '../../lib/artwork';
 
 export let onPlayTrack: (track: any) => void = () => {};
 export let onOpenPlaylist: (id: string) => void = () => {};
@@ -142,7 +143,7 @@ $: savedCollectionCount = libraryData.length + albumData.length + artistData.len
               {#each group.items as item}
                 <div class="history-row-wrap">
                   <button type="button" class="history-row" on:click={() => handlePlayHistoryItem(item)}>
-                    <img src={item.thumbnail || '/placeholder.jpg'} alt="" class="history-thumb" />
+                    <img src={artworkUrl(item.thumbnail, 1000) || '/placeholder.svg'} alt="" class="history-thumb" on:error={(event) => recoverArtwork(event, item)} />
                     <div class="history-meta">
                       <div class="history-title">{item.title}</div>
                       <div class="history-sub">{item.artist || item.subtitle || 'Track'}</div>
@@ -168,7 +169,7 @@ $: savedCollectionCount = libraryData.length + albumData.length + artistData.len
               class="lib-card"
               on:click={() => onOpenPlaylist(item.id || item.playlistId || item.browseId || item.browse_id || '')}
             >
-              <img src={item.thumbnail || '/placeholder.jpg'} alt="" class="card-art" />
+              <img src={artworkUrl(item.thumbnail, 1400) || '/placeholder.svg'} alt="" class="card-art" on:error={(event) => recoverArtwork(event, item)} />
               <div class="card-title">{item.title}</div>
               <div class="card-subtitle">{item.subtitle || 'Playlist'}</div>
             </button>
@@ -190,7 +191,7 @@ $: savedCollectionCount = libraryData.length + albumData.length + artistData.len
         <div class="playlists-grid">
           {#each albumData as item (item.id)}
             <button type="button" class="lib-card" on:click={() => onOpenPlaylist(item.id)}>
-              <img src={item.thumbnail || '/placeholder.jpg'} alt="" class="card-art" />
+              <img src={artworkUrl(item.thumbnail, 1400) || '/placeholder.svg'} alt="" class="card-art" on:error={(event) => recoverArtwork(event, item)} />
               <div class="card-title">{item.title}</div><div class="card-subtitle">{item.subtitle || 'Album'}</div>
             </button>
           {/each}
@@ -204,7 +205,7 @@ $: savedCollectionCount = libraryData.length + albumData.length + artistData.len
         <div class="playlists-grid">
           {#each artistData as item (item.id)}
             <button type="button" class="lib-card" on:click={() => onOpenArtist(item.id)}>
-              <img src={item.thumbnail || '/placeholder.jpg'} alt="" class="card-art" />
+              <img src={artworkUrl(item.thumbnail, 1000) || '/placeholder.svg'} alt="" class="card-art" on:error={(event) => recoverArtwork(event, item)} />
               <div class="card-title">{item.title}</div><div class="card-subtitle">{item.subtitle || 'Artist'}</div>
             </button>
           {/each}

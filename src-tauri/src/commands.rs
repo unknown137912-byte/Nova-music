@@ -330,6 +330,15 @@ pub async fn get_history(state: State<'_, AppState>) -> Result<serde_json::Value
 }
 
 #[tauri::command]
+pub async fn clear_local_playback_history(state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .db
+        .clear_local_history()
+        .await
+        .map_err(|error| format!("Could not clear NOVA's local playback history: {error}"))
+}
+
+#[tauri::command]
 pub async fn get_liked_tracks(
     state: State<'_, AppState>,
 ) -> Result<Vec<serde_json::Value>, String> {
@@ -342,6 +351,7 @@ pub async fn get_liked_tracks(
 
 #[tauri::command]
 pub async fn get_listening_recommendations(
+    seed_track_id: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     if state
@@ -355,20 +365,49 @@ pub async fn get_listening_recommendations(
     {
         return Ok(serde_json::json!([]));
     }
-    let seed = state
-        .db
-        .get_top_listened_track()
-        .await
-        .map_err(|e| e.to_string())?;
-    let Some(seed) = seed else {
-        return Ok(serde_json::json!([]));
-    };
-    let Some(video_id) = seed.get("videoId").and_then(serde_json::Value::as_str) else {
-        return Ok(serde_json::json!([]));
+    let requested_id = seed_track_id
+        .filter(|id| !id.trim().is_empty())
+        .map(|id| id.trim().to_owned());
+    let current_track = state.current_track.lock().unwrap().clone();
+    let current_id = current_track
+        .as_ref()
+        .and_then(|track| track.get("id").or_else(|| track.get("videoId")))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    let video_id = requested_id.or(current_id);
+    let (seed, video_id) = if let Some(video_id) = video_id {
+        let seed = current_track
+            .filter(|track| {
+                track
+                    .get("id")
+                    .or_else(|| track.get("videoId"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some(video_id.as_str())
+            })
+            .unwrap_or_else(|| serde_json::json!({ "id": video_id, "videoId": video_id }));
+        (seed, video_id)
+    } else {
+        let Some(seed) = state
+            .db
+            .get_top_listened_track()
+            .await
+            .map_err(|e| e.to_string())?
+        else {
+            return Ok(serde_json::json!([]));
+        };
+        let Some(video_id) = seed
+            .get("videoId")
+            .or_else(|| seed.get("id"))
+            .and_then(serde_json::Value::as_str)
+        else {
+            return Ok(serde_json::json!([]));
+        };
+        let video_id = video_id.to_owned();
+        (seed, video_id)
     };
     let _ = crate::auth::ensure_access_token(&state).await;
     let client = metadata_client()?;
-    let page = match state.innertube.next(&client, Some(video_id), None).await {
+    let page = match state.innertube.next(&client, Some(&video_id), None).await {
         Ok(page) => page,
         Err(error) => {
             tracing::warn!("listening recommendations error: {error}");
@@ -379,7 +418,7 @@ pub async fn get_listening_recommendations(
         if let Some(radio) = page.automix_playlist_id.as_deref() {
             match state
                 .innertube
-                .next(&client, Some(video_id), Some(radio))
+                .next(&client, Some(&video_id), Some(radio))
                 .await
             {
                 Ok(continued) => continued.items,
@@ -694,6 +733,27 @@ pub async fn download_track(
     download_audio(&state, &app, &track_id, &title).await
 }
 
+#[tauri::command]
+pub fn cancel_download(job_id: String, state: State<'_, AppState>) -> bool {
+    state
+        .download_cancellations
+        .lock()
+        .unwrap()
+        .get(&job_id)
+        .is_some_and(|cancel| {
+            cancel.send_replace(true);
+            true
+        })
+}
+
+async fn wait_for_download_cancel(cancel: &mut tokio::sync::watch::Receiver<bool>) {
+    while !*cancel.borrow() {
+        if cancel.changed().await.is_err() {
+            break;
+        }
+    }
+}
+
 fn emit_download_update(
     app: &AppHandle,
     id: &str,
@@ -727,10 +787,17 @@ async fn download_audio(
         chrono::Utc::now().timestamp_millis(),
         rand::random::<u32>()
     );
+    let (cancel_sender, mut cancel_receiver) = tokio::sync::watch::channel(false);
+    state
+        .download_cancellations
+        .lock()
+        .unwrap()
+        .insert(id.clone(), cancel_sender);
     emit_download_update(
         app, &id, track_id, title, "starting", None, 0, None, None, None,
     );
-    let result = download_audio_inner(state, app, &id, track_id, title).await;
+    let result = download_audio_inner(state, app, &id, track_id, title, &mut cancel_receiver).await;
+    state.download_cancellations.lock().unwrap().remove(&id);
     match &result {
         Ok(path) => emit_download_update(
             app,
@@ -742,6 +809,18 @@ async fn download_audio(
             0,
             None,
             Some(path),
+            None,
+        ),
+        Err(error) if error == "Download cancelled" => emit_download_update(
+            app,
+            &id,
+            track_id,
+            title,
+            "cancelled",
+            None,
+            0,
+            None,
+            None,
             None,
         ),
         Err(error) => emit_download_update(
@@ -766,6 +845,7 @@ async fn download_audio_inner(
     job_id: &str,
     track_id: &str,
     title: &str,
+    cancel: &mut tokio::sync::watch::Receiver<bool>,
 ) -> Result<String, String> {
     let quality = audio_quality(
         state
@@ -776,7 +856,10 @@ async fn download_audio_inner(
             .flatten()
             .or(state.db.get_setting("quality").await.ok().flatten()),
     );
-    let resolved = resolve_audio(state, track_id, quality).await?;
+    let resolved = tokio::select! {
+        _ = wait_for_download_cancel(cancel) => return Err("Download cancelled".into()),
+        result = resolve_audio(state, track_id, quality) => result?,
+    };
     let format = state
         .db
         .get_setting("download_format")
@@ -811,10 +894,11 @@ async fn download_audio_inner(
         let value = reqwest::header::HeaderValue::from_str(value).map_err(|e| e.to_string())?;
         request = request.header(key, value);
     }
-    let mut response = request
-        .send()
-        .await
-        .map_err(|e| format!("Download request failed: {e}"))?
+    let response = tokio::select! {
+        _ = wait_for_download_cancel(cancel) => return Err("Download cancelled".into()),
+        result = request.send() => result.map_err(|e| format!("Download request failed: {e}"))?,
+    };
+    let mut response = response
         .error_for_status()
         .map_err(|e| format!("The audio server refused the download: {e}"))?;
     let total_bytes = response.content_length();
@@ -878,7 +962,15 @@ async fn download_audio_inner(
     let mut bytes_downloaded = 0u64;
     let mut last_progress_update = std::time::Instant::now();
     loop {
-        let chunk = match response.chunk().await {
+        let chunk_result = tokio::select! {
+            _ = wait_for_download_cancel(cancel) => {
+                drop(file);
+                let _ = tokio::fs::remove_file(&partial).await;
+                return Err("Download cancelled".into());
+            }
+            result = response.chunk() => result,
+        };
+        let chunk = match chunk_result {
             Ok(Some(chunk)) => chunk,
             Ok(None) => break,
             Err(error) => {
@@ -919,6 +1011,10 @@ async fn download_audio_inner(
         return Err(format!("Could not finish audio download: {error}"));
     }
     drop(file);
+    if *cancel.borrow() {
+        let _ = tokio::fs::remove_file(&partial).await;
+        return Err("Download cancelled".into());
+    }
     if format == "original" || !matches!(format.as_str(), "mp3" | "opus" | "flac") {
         if let Err(error) = tokio::fs::rename(&partial, &destination).await {
             let _ = tokio::fs::remove_file(&partial).await;
@@ -973,8 +1069,8 @@ async fn download_audio_inner(
             _ => {}
         }
         command.arg(&converted);
-        let status = match command.status().await {
-            Ok(status) => status,
+        let mut child = match command.kill_on_drop(true).spawn() {
+            Ok(child) => child,
             Err(error) => {
                 let _ = tokio::fs::remove_file(&partial).await;
                 let _ = tokio::fs::remove_file(&converted).await;
@@ -982,6 +1078,15 @@ async fn download_audio_inner(
                     "Audio conversion needs FFmpeg installed and available on PATH: {error}"
                 ));
             }
+        };
+        let status = tokio::select! {
+            _ = wait_for_download_cancel(cancel) => {
+                let _ = child.kill().await;
+                let _ = tokio::fs::remove_file(&partial).await;
+                let _ = tokio::fs::remove_file(&converted).await;
+                return Err("Download cancelled".into());
+            }
+            result = child.wait() => result.map_err(|error| format!("Audio conversion failed: {error}"))?,
         };
         if !status.success() {
             let _ = tokio::fs::remove_file(&converted).await;
@@ -1606,6 +1711,26 @@ pub async fn update_settings(
         "motion_preference" if !matches!(value.as_str(), "full" | "reduced") => {
             return Err("Choose full or reduced motion.".into());
         }
+        "cosmic_theme" if !matches!(value.as_str(), "nebula" | "cyber" | "deepspace") => {
+            return Err("Choose one of the NOVA appearance themes.".into());
+        }
+        "appearance_density" if !matches!(value.as_str(), "comfortable" | "compact") => {
+            return Err("Choose comfortable or compact interface density.".into());
+        }
+        "start_page" if !matches!(value.as_str(), "home" | "library" | "search") => {
+            return Err("Choose Home, Library, or Search as the start page.".into());
+        }
+        "repeat_mode" if !matches!(value.as_str(), "0" | "1" | "2") => {
+            return Err("Repeat mode must be off, repeat one, or repeat all.".into());
+        }
+        "lyrics_font_size" => {
+            let size = value
+                .parse::<u8>()
+                .map_err(|_| "Lyrics size must be between 14 and 28 pixels.")?;
+            if !(14..=28).contains(&size) {
+                return Err("Lyrics size must be between 14 and 28 pixels.".into());
+            }
+        }
         "accent_color"
             if value.len() != 7
                 || !value.starts_with('#')
@@ -1615,7 +1740,8 @@ pub async fn update_settings(
         {
             return Err("Accent color must be a six-digit hex color.".into());
         }
-        "replay_gain" | "gapless" | "auto_play_next" | "history_enabled"
+        "replay_gain" | "gapless" | "auto_play_next" | "history_enabled" | "shuffle_mode"
+        | "auto_open_lyrics" | "song_notifications" | "close_to_tray" | "sidebar_visible"
             if !matches!(value.as_str(), "true" | "false") =>
         {
             return Err("This setting must be true or false.".into());

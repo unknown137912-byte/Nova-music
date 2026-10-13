@@ -55,8 +55,9 @@ function formatTime(seconds: number) {
         </div>
 
         {#each queue as track, index}
-          <div class="queue-item {index === currentTrackIndex ? 'playing' : ''}" 
-               on:click={() => invoke('play_track', { trackId: track.videoId || track.video_id || track.id })}>
+          <div class="queue-item {index === currentTrackIndex ? 'playing' : ''}" role="button" tabindex="0"
+               on:click={() => invoke('play_track', { trackId: track.videoId || track.video_id || track.id })}
+               on:keydown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); void invoke('play_track', { trackId: track.videoId || track.video_id || track.id }); } }}>
             <div class="queue-number">{index + 1}</div>
             <div class="queue-info">
               <h4>{track.title}</h4>

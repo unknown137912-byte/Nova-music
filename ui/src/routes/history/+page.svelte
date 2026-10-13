@@ -49,7 +49,7 @@ function formatTime(seconds: number) {
       {#if history.length > 0}
         <div class="history-list">
           {#each history as track (track.id)}
-            <div class="history-item" on:click={() => invoke('play_track', { trackId: track.videoId || track.video_id || track.id })}>
+            <div class="history-item" role="button" tabindex="0" on:click={() => invoke('play_track', { trackId: track.videoId || track.video_id || track.id })} on:keydown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); void invoke('play_track', { trackId: track.videoId || track.video_id || track.id }); } }}>
               <div class="history-number">{history.indexOf(track) + 1}</div>
               <div class="history-info">
                 <h4>{track.title}</h4>

@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="backdrop" x1="104" y1="70" x2="916" y2="962" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#17222e"/>
+      <stop offset=".52" stop-color="#10131c"/>
+      <stop offset="1" stop-color="#241526"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="matrix(470 410 -402 460 350 316)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ff8a69" stop-opacity=".56"/>
+      <stop offset=".48" stop-color="#e94c9b" stop-opacity=".18"/>
+      <stop offset="1" stop-color="#e94c9b" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="orbit" x1="226" y1="654" x2="819" y2="337" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f2a48f"/>
+      <stop offset=".52" stop-color="#fa6f98"/>
+      <stop offset="1" stop-color="#78d7db"/>
+    </linearGradient>
+    <linearGradient id="bars" x1="365" y1="671" x2="686" y2="351" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffd2a9"/>
+      <stop offset=".48" stop-color="#ff7a91"/>
+      <stop offset="1" stop-color="#88e5df"/>
+    </linearGradient>
+    <linearGradient id="flare" x1="514" y1="181" x2="514" y2="373" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fff5d7"/>
+      <stop offset="1" stop-color="#ff9c8a"/>
+    </linearGradient>
+    <filter id="soft" x="88" y="68" width="848" height="848" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse">
+      <feGaussianBlur stdDeviation="40"/>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" rx="228" fill="url(#backdrop)"/>
+  <circle cx="354" cy="342" r="312" fill="url(#glow)"/>
+  <circle cx="715" cy="738" r="226" fill="#2f8f9e" fill-opacity=".14" filter="url(#soft)"/>
+  <path d="M168 615c106-207 302-331 497-307 83 10 151 47 199 104-69-26-144-31-220-13-173 42-300 192-320 373-8 66-2 126 15 181-80-50-137-126-164-218-12-40-14-80-7-120Z" fill="none" stroke="url(#orbit)" stroke-opacity=".43" stroke-width="17" stroke-linecap="round"/>
+  <path d="M289 674c-20-31-29-67-27-108 5-112 87-205 193-221 60-9 112 7 153 43 27 24 45 55 53 91" fill="none" stroke="url(#orbit)" stroke-opacity=".84" stroke-width="24" stroke-linecap="round"/>
+  <path d="M356 614V485c0-24 19-43 43-43s43 19 43 43v164c0 24 19 43 43 43s43-19 43-43V393c0-24 19-43 43-43s43 19 43 43v256c0 24 19 43 43 43s43-19 43-43V510" fill="none" stroke="url(#bars)" stroke-width="38" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M513 151c18 98 45 137 143 157-98 18-137 45-157 143-18-98-45-137-143-157 98-18 137-45 157-143Z" fill="url(#flare)"/>
+  <circle cx="787" cy="312" r="14" fill="#fff2d7"/>
+  <circle cx="237" cy="738" r="10" fill="#8be5df"/>
+  <circle cx="748" cy="786" r="8" fill="#f69fb7"/>
+</svg>

@@ -2,6 +2,7 @@
 import { onMount } from 'svelte';
 import { fade } from 'svelte/transition';
 import { invoke } from '@tauri-apps/api/core';
+import { artworkUrl, recoverArtwork } from '../../lib/artwork';
 
 let loading = true;
 let error = null;
@@ -89,7 +90,7 @@ function setRepeat(mode: string) {
       <div class="artwork-area">
         {#if track}
           <div class="artwork-wrapper">
-            <img src={track.thumbnail || '/placeholder.jpg'} alt={track.title} />
+            <img src={artworkUrl(track.thumbnail, 1400) || '/placeholder.svg'} alt={track.title} on:error={(event) => recoverArtwork(event, track)} />
             <div class="artwork-overlay">
               <h2>{track.title}</h2>
               <p>{track.artist}</p>

@@ -10,6 +10,8 @@ pub struct AppState {
     pub orchestrator: Arc<crate::orchestrator::Orchestrator>,
     pub current_track: Arc<Mutex<Option<serde_json::Value>>>,
     pub queue: Arc<Mutex<Vec<serde_json::Value>>>,
+    pub download_cancellations:
+        Arc<Mutex<std::collections::HashMap<String, tokio::sync::watch::Sender<bool>>>>,
     playback_events: Arc<Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<player::PlayerEvent>>>>,
 }
 
@@ -92,6 +94,7 @@ impl AppState {
         )?);
         let current_track = Arc::new(Mutex::new(None));
         let queue = Arc::new(Mutex::new(Vec::new()));
+        let download_cancellations = Arc::new(Mutex::new(std::collections::HashMap::new()));
 
         Ok(Self {
             db,
@@ -102,6 +105,7 @@ impl AppState {
             orchestrator,
             current_track,
             queue,
+            download_cancellations,
             playback_events,
         })
     }

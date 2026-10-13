@@ -53,8 +53,9 @@ function formatTime(seconds: number) {
   {:else}
     <div class="lyrics-container">
       {#each lyrics as line, index}
-        <div class="lyric-line {currentLine === index ? 'active' : ''}" 
-             on:click={() => currentLine = index}>
+        <div class="lyric-line {currentLine === index ? 'active' : ''}" role="button" tabindex="0"
+             on:click={() => currentLine = index}
+             on:keydown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); currentLine = index; } }}>
           <div class="timestamp">{formatTime(line.timestamp)}</div>
           <div class="lyric-text">{line.line}</div>
         </div>

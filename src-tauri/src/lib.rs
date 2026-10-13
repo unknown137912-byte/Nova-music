@@ -79,6 +79,7 @@ pub fn run() {
             commands::add_track_to_local_playlist,
             commands::delete_local_playlist,
             commands::get_history,
+            commands::clear_local_playback_history,
             commands::get_listening_recommendations,
             commands::get_account_info,
             commands::search,
@@ -86,6 +87,7 @@ pub fn run() {
             commands::play_track,
             commands::download_current_track,
             commands::download_track,
+            commands::cancel_download,
             commands::enqueue_track,
             commands::dequeue_next_track,
             commands::get_autoplay_track,
@@ -117,6 +119,15 @@ pub fn run() {
                 .unwrap_or_else(|_| std::env::temp_dir());
             std::fs::create_dir_all(&data_dir).ok();
             init_logging(&data_dir);
+
+            // Register NOVA before notify-rust can deliver the first track notification.
+            // Without this, mac-notification-sys falls back to the literal bundle name
+            // "use_default", which opens Launch Services' Choose Application dialog.
+            #[cfg(target_os = "macos")]
+            if let Err(error) = notify_rust::set_application("com.novamusic.desktop") {
+                tracing::warn!(%error, "Could not register NOVA as the notification application");
+            }
+
             let cache_dir = data_dir.join("audio-cache");
             std::fs::create_dir_all(&cache_dir).ok();
 

@@ -2,6 +2,7 @@
 import { onMount } from 'svelte';
 import { invoke } from '@tauri-apps/api/core';
 import TrackActions from '../../lib/TrackActions.svelte';
+import { artworkUrl, recoverArtwork } from '../../lib/artwork';
 
 export let onPlayTrack: (track: any) => void = () => {};
 export let onOpenPlaylist: (id: string) => void = () => {};
@@ -54,6 +55,7 @@ function parseDuration(dStr: string): number {
   if (parts.length === 3) return (parts[0] * 3600) + (parts[1] * 60) + parts[2];
   return 180;
 }
+
 </script>
 
 <div class="search-container">
@@ -124,7 +126,7 @@ function parseDuration(dStr: string): number {
               >
                 <div class="song-index">{idx + 1}</div>
                 <div class="song-thumb-box">
-                  <img src={song.thumbnail || '/placeholder.jpg'} alt="" class="song-thumb" />
+                  <img src={artworkUrl(song.thumbnail, 900) || '/placeholder.svg'} alt="" class="song-thumb" on:error={(event) => recoverArtwork(event, song)} />
                   <div class="row-play-overlay">▶</div>
                 </div>
                 <div class="song-details">
@@ -160,7 +162,7 @@ function parseDuration(dStr: string): number {
                 on:keydown={(e) => { if (e.key === 'Enter') onOpenPlaylist(album.id); }}
               >
                 <div class="album-thumb-box">
-                  <img src={album.thumbnail || '/placeholder.jpg'} alt="" class="album-thumb" />
+                  <img src={artworkUrl(album.thumbnail, 1400) || '/placeholder.svg'} alt="" class="album-thumb" on:error={(event) => recoverArtwork(event, album)} />
                   <div class="card-play-btn">♫</div>
                 </div>
                 <div class="card-title">{album.title}</div>
@@ -184,7 +186,7 @@ function parseDuration(dStr: string): number {
                 tabindex="0"
                 on:keydown={(e) => { if (e.key === 'Enter') onOpenArtist(artist.id); }}
               >
-                <img src={artist.thumbnail || '/placeholder.jpg'} alt="" class="artist-avatar" />
+                  <img src={artworkUrl(artist.thumbnail, 700) || '/placeholder.svg'} alt="" class="artist-avatar" on:error={(event) => recoverArtwork(event, artist)} />
                 <div class="card-title text-center">{artist.title}</div>
                 <div class="card-subtitle text-center">Artist</div>
               </div>
@@ -207,7 +209,7 @@ function parseDuration(dStr: string): number {
                 on:keydown={(e) => { if (e.key === 'Enter') onOpenPlaylist(pl.id); }}
               >
                 <div class="album-thumb-box">
-                  <img src={pl.thumbnail || '/placeholder.jpg'} alt="" class="album-thumb" />
+                  <img src={artworkUrl(pl.thumbnail, 1400) || '/placeholder.svg'} alt="" class="album-thumb" on:error={(event) => recoverArtwork(event, pl)} />
                   <div class="card-play-btn">▶</div>
                 </div>
                 <div class="card-title">{pl.title}</div>
