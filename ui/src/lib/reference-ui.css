@@ -1003,8 +1003,11 @@
   bottom: 82px;
   width: var(--right-size);
   min-width: 0;
+  background: rgba(20,14,16,.2) !important;
   border: 0 !important;
-  box-shadow: -18px 0 44px rgba(0,0,0,.16) !important;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: blur(26px) saturate(1.16) !important;
+  backdrop-filter: blur(26px) saturate(1.16) !important;
 }
 @media (max-width: 760px) {
   #svelte .app-shell .main-content { grid-column: 1 / -1 !important; }

@@ -839,6 +839,66 @@ async fn download_audio(
     result
 }
 
+const DOWNLOAD_RANGE_SIZE: u64 = 4 * 1024 * 1024;
+const DOWNLOAD_RANGE_CONCURRENCY: usize = 4;
+
+fn download_request(
+    client: &reqwest::Client,
+    url: &str,
+    headers: &std::collections::HashMap<String, String>,
+    range: Option<(u64, u64)>,
+) -> Result<reqwest::RequestBuilder, String> {
+    let mut request = client
+        .get(url)
+        .header(reqwest::header::ACCEPT_ENCODING, "identity");
+    if let Some((start, end)) = range {
+        request = request.header(reqwest::header::RANGE, format!("bytes={start}-{end}"));
+    }
+    for (name, value) in headers {
+        let key = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+            .map_err(|error| error.to_string())?;
+        let value =
+            reqwest::header::HeaderValue::from_str(value).map_err(|error| error.to_string())?;
+        request = request.header(key, value);
+    }
+    Ok(request)
+}
+
+async fn download_range(
+    client: &reqwest::Client,
+    url: &str,
+    headers: &std::collections::HashMap<String, String>,
+    start: u64,
+    end: u64,
+) -> Result<Vec<u8>, String> {
+    let response = download_request(client, url, headers, Some((start, end)))?
+        .send()
+        .await
+        .map_err(|error| format!("Audio range request failed: {error}"))?;
+    if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+        return Err(format!(
+            "The audio server stopped honoring range downloads ({}).",
+            response.status()
+        ));
+    }
+    let expected = (end - start + 1) as usize;
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| format!("Audio range download stopped: {error}"))?;
+    if bytes.len() != expected {
+        return Err(format!(
+            "The audio server returned an incomplete range ({}/{expected} bytes).",
+            bytes.len()
+        ));
+    }
+    Ok(bytes.to_vec())
+}
+
+fn total_from_content_range(value: &str) -> Option<u64> {
+    value.rsplit_once('/')?.1.trim().parse().ok()
+}
+
 async fn download_audio_inner(
     state: &AppState,
     app: &AppHandle,
@@ -886,28 +946,85 @@ async fn download_audio_inner(
     tokio::fs::create_dir_all(&directory)
         .await
         .map_err(|e| format!("Could not create the download folder: {e}"))?;
-    let client = reqwest::Client::new();
-    let mut request = client.get(&resolved.url);
-    for (name, value) in &resolved.headers {
-        let key =
-            reqwest::header::HeaderName::from_bytes(name.as_bytes()).map_err(|e| e.to_string())?;
-        let value = reqwest::header::HeaderValue::from_str(value).map_err(|e| e.to_string())?;
-        request = request.header(key, value);
-    }
-    let response = tokio::select! {
+    let client = crate::http::client();
+    let probe_request = download_request(client, &resolved.url, &resolved.headers, Some((0, 0)))?;
+    let probe = tokio::select! {
         _ = wait_for_download_cancel(cancel) => return Err("Download cancelled".into()),
-        result = request.send() => result.map_err(|e| format!("Download request failed: {e}"))?,
+        result = probe_request.send() => result.map_err(|e| format!("Download request failed: {e}"))?,
     };
-    let mut response = response
+    let (total_bytes, content_type, use_ranges, mut direct_response) = if probe.status()
+        == reqwest::StatusCode::PARTIAL_CONTENT
+    {
+        let total = probe
+            .headers()
+            .get(reqwest::header::CONTENT_RANGE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(total_from_content_range);
+        let content_type = probe
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let probe_bytes = tokio::select! {
+            _ = wait_for_download_cancel(cancel) => return Err("Download cancelled".into()),
+            result = probe.bytes() => result.map_err(|error| format!("Could not inspect the audio stream: {error}"))?,
+        };
+        if let Some(total) = total.filter(|total| *total > 0) {
+            if probe_bytes.len() != 1 {
+                return Err("The audio server returned an invalid range probe.".into());
+            }
+            (Some(total), content_type, true, None)
+        } else {
+            let request = download_request(client, &resolved.url, &resolved.headers, None)?;
+            let response = tokio::select! {
+                _ = wait_for_download_cancel(cancel) => return Err("Download cancelled".into()),
+                result = request.send() => result.map_err(|error| format!("Download request failed: {error}"))?,
+            }
+            .error_for_status()
+            .map_err(|error| format!("The audio server refused the download: {error}"))?;
+            let content_type = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            (
+                response.content_length(),
+                content_type,
+                false,
+                Some(response),
+            )
+        }
+    } else if probe.status() == reqwest::StatusCode::OK {
+        let content_type = probe
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        (probe.content_length(), content_type, false, Some(probe))
+    } else {
+        let request = download_request(client, &resolved.url, &resolved.headers, None)?;
+        let response = tokio::select! {
+            _ = wait_for_download_cancel(cancel) => return Err("Download cancelled".into()),
+            result = request.send() => result.map_err(|error| format!("Download request failed: {error}"))?,
+        }
         .error_for_status()
-        .map_err(|e| format!("The audio server refused the download: {e}"))?;
-    let total_bytes = response.content_length();
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_ascii_lowercase();
+        .map_err(|error| format!("The audio server refused the download: {error}"))?;
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        (
+            response.content_length(),
+            content_type,
+            false,
+            Some(response),
+        )
+    };
     let source_extension = if content_type.contains("mp4") {
         "m4a"
     } else if content_type.contains("mpeg") || content_type.contains("mp3") {
@@ -961,49 +1078,96 @@ async fn download_audio_inner(
         .map_err(|e| format!("Could not create download file: {e}"))?;
     let mut bytes_downloaded = 0u64;
     let mut last_progress_update = std::time::Instant::now();
-    loop {
-        let chunk_result = tokio::select! {
-            _ = wait_for_download_cancel(cancel) => {
-                drop(file);
-                let _ = tokio::fs::remove_file(&partial).await;
-                return Err("Download cancelled".into());
+    let download_result: Result<(), String> = async {
+        if use_ranges {
+            let total = total_bytes.ok_or_else(|| "The audio server did not report its file size.".to_string())?;
+            let mut ranges = Vec::new();
+            let mut start = 0_u64;
+            while start < total {
+                let end = (start + DOWNLOAD_RANGE_SIZE - 1).min(total - 1);
+                ranges.push((start, end));
+                start = end + 1;
             }
-            result = response.chunk() => result,
-        };
-        let chunk = match chunk_result {
-            Ok(Some(chunk)) => chunk,
-            Ok(None) => break,
-            Err(error) => {
-                drop(file);
-                let _ = tokio::fs::remove_file(&partial).await;
-                return Err(format!("Audio download stopped: {error}"));
+
+            for batch in ranges.chunks(DOWNLOAD_RANGE_CONCURRENCY) {
+                let pending = futures_util::future::join_all(batch.iter().map(|(start, end)| {
+                    download_range(client, &resolved.url, &resolved.headers, *start, *end)
+                }));
+                let results = tokio::select! {
+                    _ = wait_for_download_cancel(cancel) => return Err("Download cancelled".into()),
+                    results = pending => results,
+                };
+                for result in results {
+                    let chunk = result?;
+                    file.write_all(&chunk)
+                        .await
+                        .map_err(|error| format!("Could not write audio download: {error}"))?;
+                    bytes_downloaded += chunk.len() as u64;
+                    let progress = total_bytes.map(|total| {
+                        (bytes_downloaded as f64 / total.max(1) as f64 * 100.0).min(99.0)
+                    });
+                    if last_progress_update.elapsed() >= std::time::Duration::from_millis(250)
+                        || progress.is_some_and(|value| value >= 99.0)
+                    {
+                        emit_download_update(
+                            app,
+                            job_id,
+                            track_id,
+                            title,
+                            "downloading",
+                            progress,
+                            bytes_downloaded,
+                            total_bytes,
+                            None,
+                            None,
+                        );
+                        last_progress_update = std::time::Instant::now();
+                    }
+                }
             }
-        };
-        if let Err(error) = file.write_all(&chunk).await {
-            drop(file);
-            let _ = tokio::fs::remove_file(&partial).await;
-            return Err(format!("Could not write audio download: {error}"));
+        } else {
+            let mut response = direct_response
+                .take()
+                .ok_or_else(|| "The audio server did not return a download stream.".to_string())?;
+            loop {
+                let chunk = tokio::select! {
+                    _ = wait_for_download_cancel(cancel) => return Err("Download cancelled".into()),
+                    result = response.chunk() => result.map_err(|error| format!("Audio download stopped: {error}"))?,
+                };
+                let Some(chunk) = chunk else { break };
+                file.write_all(&chunk)
+                    .await
+                    .map_err(|error| format!("Could not write audio download: {error}"))?;
+                bytes_downloaded += chunk.len() as u64;
+                let progress = total_bytes.map(|total| {
+                    (bytes_downloaded as f64 / total.max(1) as f64 * 100.0).min(99.0)
+                });
+                if last_progress_update.elapsed() >= std::time::Duration::from_millis(250)
+                    || progress.is_some_and(|value| value >= 99.0)
+                {
+                    emit_download_update(
+                        app,
+                        job_id,
+                        track_id,
+                        title,
+                        "downloading",
+                        progress,
+                        bytes_downloaded,
+                        total_bytes,
+                        None,
+                        None,
+                    );
+                    last_progress_update = std::time::Instant::now();
+                }
+            }
         }
-        bytes_downloaded += chunk.len() as u64;
-        let progress = total_bytes
-            .map(|total| (bytes_downloaded as f64 / total.max(1) as f64 * 100.0).min(99.0));
-        if last_progress_update.elapsed() >= std::time::Duration::from_millis(250)
-            || progress.is_some_and(|value| value >= 99.0)
-        {
-            emit_download_update(
-                app,
-                job_id,
-                track_id,
-                title,
-                "downloading",
-                progress,
-                bytes_downloaded,
-                total_bytes,
-                None,
-                None,
-            );
-            last_progress_update = std::time::Instant::now();
-        }
+        Ok(())
+    }
+    .await;
+    if let Err(error) = download_result {
+        drop(file);
+        let _ = tokio::fs::remove_file(&partial).await;
+        return Err(error);
     }
     if let Err(error) = file.flush().await {
         drop(file);

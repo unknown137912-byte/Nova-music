@@ -68,7 +68,7 @@
   let lyricsFontSize = 19;
   let sidebarVisible = true;
   let confirmClearHistory = false;
-  let appVersion = '1.3.0';
+  let appVersion = '1.3.5';
   let availableUpdate: any = null;
   let updateBusy = false;
   let updateProgress = 0;

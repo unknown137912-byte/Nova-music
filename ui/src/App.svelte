@@ -47,6 +47,9 @@
   let isSeeking = false;
   let currentVolume = 85;
   let libraryCollections: Record<string, any[]> = { playlists: [], albums: [], artists: [] };
+  let libraryLoading = true;
+  let libraryLoaded = false;
+  let libraryLoadingTimer: ReturnType<typeof setTimeout> | undefined;
   let likedTrackIds = new Set<string>();
   let downloadJobs: any[] = [];
   let activeDownloadJobs: any[] = [];
@@ -315,11 +318,24 @@
     });
 
     const loadAccountAndLibrary = async () => {
+      if (!libraryLoaded) {
+        libraryLoading = true;
+        if (libraryLoadingTimer) clearTimeout(libraryLoadingTimer);
+        // A slow remote library must not leave the Library route looking frozen.
+        // The request continues and can still populate the page when it completes.
+        libraryLoadingTimer = setTimeout(() => {
+          if (!disposed && !libraryLoaded) {
+            libraryLoaded = true;
+            libraryLoading = false;
+          }
+        }, 8000);
+      }
       try {
         const [account, library]: [any, any] = await Promise.all([
           invoke('get_account_info'), invoke('get_library'),
         ]);
         if (disposed) return;
+        if (libraryLoadingTimer) clearTimeout(libraryLoadingTimer);
         accountSignedIn = Boolean(account?.is_logged_in);
         accountName = account?.name || account?.email || '';
         libraryCollections = {
@@ -329,8 +345,13 @@
           albums: library?.albums || [],
           artists: library?.artists || [],
         };
+        libraryLoaded = true;
+        libraryLoading = false;
       } catch (_) {
         // The app can still play/search while account or library data is unavailable.
+        if (libraryLoadingTimer) clearTimeout(libraryLoadingTimer);
+        libraryLoaded = true;
+        libraryLoading = false;
       }
     };
 
@@ -417,6 +438,7 @@
       disposed = true;
       clearInterval(playbackTimer);
       clearInterval(accountTimer);
+      if (libraryLoadingTimer) clearTimeout(libraryLoadingTimer);
       if (appNoticeTimer) clearTimeout(appNoticeTimer);
       stopStart?.();
       stopError?.();
@@ -950,6 +972,13 @@
     } : null);
   }
 
+  function recoverCollectionArtwork(event: Event) {
+    recoverArtwork(event, {
+      ...(playbackCollection || nowPlaying || {}),
+      fallbackArtwork: collectionFallbackArtwork || currentArtwork || '',
+    });
+  }
+
   async function toggleLikeTrack() {
     const trackId = String(nowPlaying?.id || '').trim();
     if (!trackId) return;
@@ -1014,6 +1043,8 @@
     ? playbackCollection.items.slice(activeImmersiveTrackIndex + 1)
     : queueItems;
   $: currentArtwork = artworkFor(nowPlaying, 1600, playbackCollection?.thumbnail || playbackCollection?.cover || pageArtwork || nowPlaying?.fallbackArtwork || '');
+  $: collectionFallbackArtwork = artworkFor(playbackCollection?.items?.[0] || nowPlaying, 1600, currentArtwork);
+  $: collectionArtwork = artworkFor(playbackCollection, 1600, collectionFallbackArtwork || currentArtwork);
   $: immersiveArtwork = currentArtwork;
   $: activeDownloadJobs = downloadJobs.filter((job) => ['starting', 'downloading', 'converting'].includes(job.status));
   $: if (activeDownloadJobs.length === 0 && downloadsOpen) downloadsOpen = false;
@@ -1173,11 +1204,11 @@
       {#key `${activeTab}:${activePlaylistId || ''}:${activeArtistId}:${activeTab === 'search' ? globalSearchQuery : ''}`}
       <div class="route-layer" in:fly={{ y: 8, duration: 230 }} out:fade={{ duration: 115 }}>
       {#if activeTab === 'home'}
-        <Home accountName={accountName} currentTrackId={String(nowPlaying?.id || '')} onPlayTrack={handlePlayTrack} onOpenPlaylist={handleOpenPlaylist} onOpenArtist={handleOpenArtist} onTrackAction={handleTrackAction} playlistOptions={libraryCollections.playlists} />
+        <Home accountName={accountName} currentTrackId={String(nowPlaying?.id || '')} fallbackArtwork={currentArtwork} onPlayTrack={handlePlayTrack} onOpenPlaylist={handleOpenPlaylist} onOpenArtist={handleOpenArtist} onTrackAction={handleTrackAction} playlistOptions={libraryCollections.playlists} />
       {:else if activeTab === 'search'}
         <SearchPage initialQuery={globalSearchQuery} onPlayTrack={handlePlayTrack} onOpenPlaylist={handleOpenPlaylist} onOpenArtist={handleOpenArtist} onTrackAction={handleTrackAction} playlistOptions={libraryCollections.playlists} />
       {:else if activeTab === 'library'}
-        <LibraryPage onPlayTrack={handlePlayTrack} onOpenPlaylist={handleOpenPlaylist} onOpenArtist={handleOpenArtist} onTrackAction={handleTrackAction} playlistOptions={libraryCollections.playlists} />
+        <LibraryPage libraryCollections={libraryCollections} libraryLoading={libraryLoading} accountInfo={{ is_logged_in: accountSignedIn, name: accountName }} fallbackArtwork={currentArtwork} onPlayTrack={handlePlayTrack} onOpenPlaylist={handleOpenPlaylist} onOpenArtist={handleOpenArtist} onTrackAction={handleTrackAction} playlistOptions={libraryCollections.playlists} />
       {:else if activeTab === 'playlists'}
         <Playlists bind:activePlaylistId bind:category={playlistCategory} onPlayTrack={handlePlayTrack} onOpenArtist={handleOpenArtist} onTrackAction={handleTrackAction} playlistOptions={libraryCollections.playlists} />
       {:else if activeTab === 'artist'}
@@ -1215,7 +1246,7 @@
               <div class="panel-album-card">
                 <div class="panel-album-heading"><strong>Playing from</strong><MoreHorizontal size={18} /></div>
                 <button class="panel-album-link" disabled={!nowPlaying.albumId} on:click={() => nowPlaying.albumId && handleOpenPlaylist(nowPlaying.albumId)}>
-                  <img src={artworkFor(playbackCollection || nowPlaying, 1000, currentArtwork)} alt="" on:error={recoverNowPlayingArtwork} />
+                  <img src={artworkFor(playbackCollection, 1000, collectionFallbackArtwork || currentArtwork)} alt="" on:error={recoverCollectionArtwork} />
                   <span><strong>{nowPlaying.album || 'YouTube Music'}</strong><small>{nowPlaying.album ? 'Album' : 'Current source'}</small></span>
                 </button>
               </div>
@@ -1296,7 +1327,7 @@
       <div class="immersive-content">
         <section class="immersive-playlist" aria-label="Playlist tracks">
           <div class="immersive-playlist-summary">
-            <img src={artworkFor(playbackCollection || nowPlaying, 1600, currentArtwork)} alt="" on:error={recoverNowPlayingArtwork} />
+            <img src={collectionArtwork} alt="" on:error={recoverCollectionArtwork} />
             <div><span>PLAYING FROM</span><h1>{playbackCollection?.title || nowPlaying.album || 'Up Next'}</h1><p>{playbackCollection?.items?.length || immersiveTracks.length} songs · {nowPlaying.artist || 'YouTube Music'}</p></div>
           </div>
           <div class="immersive-playlist-tools">

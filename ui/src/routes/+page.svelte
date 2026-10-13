@@ -13,6 +13,7 @@
   export let onOpenArtist: (id: string) => void = () => {};
   export let onTrackAction: (track: any, action: string) => void = () => {};
   export let playlistOptions: any[] = [];
+  export let fallbackArtwork = '';
 
   let loading = true;
   let error: string | null = null;
@@ -287,7 +288,7 @@
           {#each recentTracks.slice(0, 6) as item (item.videoId || item.video_id || item.id || item.title)}
             <div class="recent-card-wrap">
               <button class="recent-card" on:click={() => playItem(item)}>
-                <img src={artworkFor(item, 1200)} alt="" loading="lazy" on:error={(event) => recoverArtwork(event, item)} />
+                <img src={artworkFor(item, 1200, fallbackArtwork)} alt="" loading="lazy" on:error={(event) => recoverArtwork(event, { ...item, fallbackArtwork })} />
                 <span class="recent-copy"><strong>{item.title || item.name || 'Unknown track'}</strong><small>{displaySubtitle(item)}</small></span>
                 <span class="recent-play"><Play size={15} fill="currentColor" /></span>
               </button>
@@ -326,7 +327,7 @@
               <div class="shelf-card-wrap">
                 <button class="shelf-card" on:click={() => openItem(item)}>
                   <span class="shelf-art-wrap">
-                    <img src={artworkFor(item, 1200)} alt="" loading="lazy" on:error={(event) => recoverArtwork(event, item)} />
+                    <img src={artworkFor(item, 1200, fallbackArtwork)} alt="" loading="lazy" on:error={(event) => recoverArtwork(event, { ...item, fallbackArtwork })} />
                     <span class="shelf-play"><Play size={17} fill="currentColor" /></span>
                   </span>
                   <span class="shelf-title">{item.title || item.name || 'Untitled'}</span>

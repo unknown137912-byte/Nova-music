@@ -3,52 +3,55 @@ import { onMount } from 'svelte';
 import { invoke } from '@tauri-apps/api/core';
 import TrackActions from '../../lib/TrackActions.svelte';
 import { RefreshCw, Clock3 } from 'lucide-svelte';
-import { artworkUrl, recoverArtwork } from '../../lib/artwork';
+import { artworkFor, recoverArtwork } from '../../lib/artwork';
 
 export let onPlayTrack: (track: any) => void = () => {};
 export let onOpenPlaylist: (id: string) => void = () => {};
 export let onOpenArtist: (id: string) => void = () => {};
 export let onTrackAction: (track: any, action: string) => void = () => {};
 export let playlistOptions: any[] = [];
+export let libraryCollections: Record<string, any[]> = { playlists: [], albums: [], artists: [] };
+export let libraryLoading = false;
+export let accountInfo: any = null;
+export let fallbackArtwork = '';
 
 let loading = true;
-let libraryData: any = null;
+let libraryData: any[] = [];
 let albumData: any[] = [];
 let artistData: any[] = [];
 let historyGroups: any[] = [];
-let accountInfo: any = null;
+let historyLoading = false;
+let historyRequestSerial = 0;
+let visibleHistoryCount = 50;
+let visiblePlaylistCount = 40;
+let visibleAlbumCount = 40;
+let visibleArtistCount = 40;
 
-async function loadData() {
+async function loadHistory() {
+  const request = ++historyRequestSerial;
+  historyLoading = true;
   try {
-    loading = true;
-    const [lib, settings, acc]: [any, any, any] = await Promise.all([
-      invoke('get_library').catch(() => []),
-      invoke('get_settings').catch(() => ({})),
-      invoke('get_account_info').catch(() => null),
-    ]);
-    libraryData = Array.isArray(lib) ? lib : (lib?.playlists || []);
-    albumData = Array.isArray(lib?.albums) ? lib.albums : [];
-    artistData = Array.isArray(lib?.artists) ? lib.artists : [];
+    const settings: any = await invoke('get_settings').catch(() => ({}));
     if (settings?.history_enabled === 'false') {
       historyGroups = [];
     } else {
       const hist: any = await invoke('get_history').catch(() => []);
+      if (request !== historyRequestSerial) return;
       const entries = Array.isArray(hist) ? hist : [];
       historyGroups = entries.some((entry) => Array.isArray(entry?.items))
         ? entries
         : (entries.length ? [{ header: 'Recently played in NOVA', items: entries }] : []);
     }
-    accountInfo = acc;
-    loading = false;
   } catch (err) {
-    console.error('Failed to load library data:', err);
-    loading = false;
+    console.error('Failed to load listening history:', err);
+  } finally {
+    if (request === historyRequestSerial) historyLoading = false;
   }
 }
 
 onMount(() => {
-  void loadData();
-  const refresh = () => void loadData();
+  void loadHistory();
+  const refresh = () => void loadHistory();
   window.addEventListener('nova-account-updated', refresh);
   window.addEventListener('nova-refresh-current-view', refresh);
   window.addEventListener('nova-playlist-updated', refresh);
@@ -60,6 +63,11 @@ onMount(() => {
     window.removeEventListener('nova-local-playlists-changed', refresh);
   };
 });
+
+$: libraryData = Array.isArray(libraryCollections?.playlists) ? libraryCollections.playlists : [];
+$: albumData = Array.isArray(libraryCollections?.albums) ? libraryCollections.albums : [];
+$: artistData = Array.isArray(libraryCollections?.artists) ? libraryCollections.artists : [];
+$: loading = libraryLoading;
 
 function handlePlayHistoryItem(item: any) {
   onPlayTrack({
@@ -85,6 +93,17 @@ function playFirstRecentTrack() {
 }
 
 $: recentTracks = historyGroups.flatMap((group) => Array.isArray(group?.items) ? group.items : []);
+$: visibleHistoryGroups = (() => {
+  let remaining = visibleHistoryCount;
+  return historyGroups.map((group) => {
+    const items = (Array.isArray(group?.items) ? group.items : []).slice(0, remaining);
+    remaining = Math.max(0, remaining - items.length);
+    return { ...group, items };
+  }).filter((group) => group.items.length);
+})();
+$: visiblePlaylists = libraryData.slice(0, visiblePlaylistCount);
+$: visibleAlbums = albumData.slice(0, visibleAlbumCount);
+$: visibleArtists = artistData.slice(0, visibleArtistCount);
 $: savedCollectionCount = libraryData.length + albumData.length + artistData.length;
 </script>
 
@@ -102,7 +121,7 @@ $: savedCollectionCount = libraryData.length + albumData.length + artistData.len
     <p>Your playlists, albums, artists, and listening history in one place.</p>
     <div class="library-toolbar">
       <div class="library-filter-pills"><span class="library-pill active">All collections</span><span class="library-pill">Playlists {libraryData.length}</span><span class="library-pill">Albums {albumData.length}</span><span class="library-pill">Artists {artistData.length}</span><small>{savedCollectionCount} saved</small></div>
-      <button class="library-refresh" on:click={loadData} disabled={loading}><RefreshCw size={14} class={loading ? 'spinning' : ''} /> Refresh</button>
+      <button class="library-refresh" on:click={() => window.dispatchEvent(new CustomEvent('nova-local-playlists-changed'))} disabled={loading || historyLoading}><RefreshCw size={14} class={loading || historyLoading ? 'spinning' : ''} /> Refresh</button>
     </div>
   </div>
 
@@ -137,13 +156,13 @@ $: savedCollectionCount = libraryData.length + albumData.length + artistData.len
       <div class="library-section">
         <h2>Recently played</h2>
         <div class="history-list">
-          {#each historyGroups as group}
+          {#each visibleHistoryGroups as group}
             {#if group.items && group.items.length > 0}
               <div class="group-header">{group.header || 'Recent'}</div>
               {#each group.items as item}
                 <div class="history-row-wrap">
                   <button type="button" class="history-row" on:click={() => handlePlayHistoryItem(item)}>
-                    <img src={artworkUrl(item.thumbnail, 1000) || '/placeholder.svg'} alt="" class="history-thumb" on:error={(event) => recoverArtwork(event, item)} />
+                    <img src={artworkFor(item, 1000, fallbackArtwork)} alt="" class="history-thumb" loading="lazy" decoding="async" on:error={(event) => recoverArtwork(event, { ...item, fallbackArtwork })} />
                     <div class="history-meta">
                       <div class="history-title">{item.title}</div>
                       <div class="history-sub">{item.artist || item.subtitle || 'Track'}</div>
@@ -156,7 +175,10 @@ $: savedCollectionCount = libraryData.length + albumData.length + artistData.len
             {/if}
           {/each}
         </div>
+        {#if recentTracks.length > visibleHistoryCount}<button class="library-load-more" on:click={() => visibleHistoryCount += 50}>Show more listening history</button>{/if}
       </div>
+    {:else if historyLoading}
+      <div class="library-section history-loading"><h2>Recently played</h2><p>Loading your latest listening…</p></div>
     {/if}
 
     <!-- Playlists Grid -->
@@ -164,17 +186,18 @@ $: savedCollectionCount = libraryData.length + albumData.length + artistData.len
       <div class="library-section">
         <h2>Your Playlists</h2>
         <div class="playlists-grid">
-          {#each libraryData as item (item.id || item.playlistId || item.browseId || item.title)}
+          {#each visiblePlaylists as item (item.id || item.playlistId || item.browseId || item.title)}
             <button type="button"
               class="lib-card"
               on:click={() => onOpenPlaylist(item.id || item.playlistId || item.browseId || item.browse_id || '')}
             >
-              <img src={artworkUrl(item.thumbnail, 1400) || '/placeholder.svg'} alt="" class="card-art" on:error={(event) => recoverArtwork(event, item)} />
+              <img src={artworkFor(item, 1400, fallbackArtwork)} alt="" class="card-art" loading="lazy" decoding="async" on:error={(event) => recoverArtwork(event, { ...item, fallbackArtwork })} />
               <div class="card-title">{item.title}</div>
               <div class="card-subtitle">{item.subtitle || 'Playlist'}</div>
             </button>
           {/each}
         </div>
+        {#if libraryData.length > visiblePlaylistCount}<button class="library-load-more" on:click={() => visiblePlaylistCount += 40}>Show more playlists</button>{/if}
       </div>
     {:else if !accountInfo?.is_logged_in && !historyGroups.length}
       <div class="empty-notice">
@@ -189,13 +212,14 @@ $: savedCollectionCount = libraryData.length + albumData.length + artistData.len
       <div class="library-section">
         <h2>Your Albums</h2>
         <div class="playlists-grid">
-          {#each albumData as item (item.id)}
+          {#each visibleAlbums as item (item.id)}
             <button type="button" class="lib-card" on:click={() => onOpenPlaylist(item.id)}>
-              <img src={artworkUrl(item.thumbnail, 1400) || '/placeholder.svg'} alt="" class="card-art" on:error={(event) => recoverArtwork(event, item)} />
+              <img src={artworkFor(item, 1400, fallbackArtwork)} alt="" class="card-art" loading="lazy" decoding="async" on:error={(event) => recoverArtwork(event, { ...item, fallbackArtwork })} />
               <div class="card-title">{item.title}</div><div class="card-subtitle">{item.subtitle || 'Album'}</div>
             </button>
           {/each}
         </div>
+        {#if albumData.length > visibleAlbumCount}<button class="library-load-more" on:click={() => visibleAlbumCount += 40}>Show more albums</button>{/if}
       </div>
     {/if}
 
@@ -203,13 +227,14 @@ $: savedCollectionCount = libraryData.length + albumData.length + artistData.len
       <div class="library-section">
         <h2>Your Artists</h2>
         <div class="playlists-grid">
-          {#each artistData as item (item.id)}
+          {#each visibleArtists as item (item.id)}
             <button type="button" class="lib-card" on:click={() => onOpenArtist(item.id)}>
-              <img src={artworkUrl(item.thumbnail, 1000) || '/placeholder.svg'} alt="" class="card-art" on:error={(event) => recoverArtwork(event, item)} />
+              <img src={artworkFor(item, 1000, fallbackArtwork)} alt="" class="card-art" loading="lazy" decoding="async" on:error={(event) => recoverArtwork(event, { ...item, fallbackArtwork })} />
               <div class="card-title">{item.title}</div><div class="card-subtitle">{item.subtitle || 'Artist'}</div>
             </button>
           {/each}
         </div>
+        {#if artistData.length > visibleArtistCount}<button class="library-load-more" on:click={() => visibleArtistCount += 40}>Show more artists</button>{/if}
       </div>
     {/if}
   {/if}
@@ -235,6 +260,9 @@ $: savedCollectionCount = libraryData.length + albumData.length + artistData.len
   .library-refresh { display: flex; align-items: center; gap: 6px; padding: 7px 10px; color: #c3c8c5; background: transparent; border: 1px solid rgba(255,255,255,.08); border-radius: 18px; font-size: 10px; cursor: pointer; }
   .library-refresh:hover { color: #fff; background: #1b1e1d; }
   .library-refresh:disabled { opacity: .55; cursor: default; }
+  .library-load-more { min-height: 32px; margin-top: 12px; padding: 0 13px; color: rgba(255,255,255,.82); background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.11); border-radius: 18px; font-size: 10px; cursor: pointer; }
+  .library-load-more:hover { color: #fff; background: rgba(255,255,255,.12); }
+  .history-loading p { color: rgba(255,255,255,.56); font-size: 11px; }
   .quick-tiles { grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; margin: 19px 0 28px; }
   .tile { min-height: 82px; padding: 14px 16px; border-radius: 10px; }
   .liked-tile { background: linear-gradient(110deg, #33243a, #1a1a22 72%); border-color: rgba(211,102,178,.23); }
